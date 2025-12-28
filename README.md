@@ -24,9 +24,12 @@ By using this software, you acknowledge that you understand these risks and acce
 ## Features
 
 - **Natural language input** - Describe what you want in plain English
+- **File reading** - Reads READMEs, configs, and docs to understand how to install/configure projects
+- **Complex task handling** - Can clone repos and follow installation instructions step by step
 - **DeepAgents powered** - Built on LangChain's agentic framework with planning capabilities
 - **Execution memory** - Remembers past commands; understands "do that again", "same but for X"
 - **Confirmation before execution** - Review, edit, or cancel commands before they run
+- **Auto-fix on error** - Analyzes failures and suggests fixes
 - **Safety warnings** - Highlights dangerous operations (rm -rf, dd, etc.)
 - **Persistent history** - Logs all translations for future reference
 - **Direct mode** - Bypass agent with `!` prefix for regular commands
@@ -37,7 +40,7 @@ By using this software, you acknowledge that you understand these risks and acce
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   User Input                        │
-│              "find large files"                     │
+│         "install this repo: github.com/..."         │
 └─────────────────────┬───────────────────────────────┘
                       │
                       ▼
@@ -47,22 +50,30 @@ By using this software, you acknowledge that you understand these risks and acce
 │  │  System Prompt + Context + History          │   │
 │  └─────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────┐   │
-│  │  Tools: run_shell_command                   │   │
+│  │  Tools:                                     │   │
+│  │   • run_shell_command (with confirmation)   │   │
+│  │   • read_file (README, requirements.txt)    │   │
+│  │   • list_directory                          │   │
 │  └─────────────────────────────────────────────┘   │
 └─────────────────────┬───────────────────────────────┘
                       │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│            User Confirmation                        │
-│  Command: find . -size +100M                        │
-│  Execute? [y/n/e(dit)]                              │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│            zsh Execution                            │
-│  subprocess.run(executable="/bin/zsh")              │
-└─────────────────────────────────────────────────────┘
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+   ┌─────────┐  ┌──────────┐  ┌──────────┐
+   │ Read    │  │ List     │  │ Execute  │
+   │ Files   │  │ Dir      │  │ Command  │
+   └─────────┘  └──────────┘  └────┬─────┘
+                                   │
+                                   ▼
+                    ┌─────────────────────────┐
+                    │   User Confirmation     │
+                    │   Execute? [y/n/e(dit)] │
+                    └───────────┬─────────────┘
+                                │
+                                ▼
+                    ┌─────────────────────────┐
+                    │   zsh Execution         │
+                    └─────────────────────────┘
 ```
 
 ## Requirements
@@ -146,6 +157,39 @@ Executing...
 ```
 
 The agent remembers your execution history, so you can use contextual references like "do that again", "same thing but for X", or "run it with different options".
+
+### Complex Task Example: Installing a Repo
+
+```
+nlsh:~$ install the repo https://github.com/user/cool-project
+
+(thinking...)
+
+Command: git clone https://github.com/user/cool-project
+Explanation: Clone the repository to the current directory
+Execute? [y/n/e(dit)]: y
+
+Executing...
+Cloning into 'cool-project'...
+✓ Command completed successfully
+
+[Agent reads README.md and requirements.txt]
+
+Command: cd cool-project && pip install -r requirements.txt
+Explanation: Install Python dependencies listed in requirements.txt
+Execute? [y/n/e(dit)]: y
+
+Executing...
+Successfully installed package1 package2...
+✓ Command completed successfully
+
+Command: pip install -e .
+Explanation: Install the package in editable mode as specified in README
+Execute? [y/n/e(dit)]: y
+...
+```
+
+The agent reads documentation files to understand installation steps and executes them one by one, always asking for confirmation.
 
 ### Shell Command Detection
 

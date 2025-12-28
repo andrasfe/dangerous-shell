@@ -41,18 +41,32 @@ SYSTEM_PROMPT = """You are an intelligent shell assistant that helps users execu
 
 Your primary function is to translate natural language requests into zsh shell commands and execute them.
 
+## Available Tools:
+1. `run_shell_command` - Execute shell commands (asks user for confirmation)
+2. `read_file` - Read contents of files (README, requirements.txt, setup.py, etc.)
+3. `list_directory` - List files in a directory
+
 ## How to work:
-1. When the user describes what they want to do, determine the appropriate zsh command
-2. Use the `run_shell_command` tool to execute commands - it will ask the user for confirmation
-3. Analyze the output and provide helpful explanations
-4. If a command fails, explain what went wrong and suggest fixes
+1. When the user describes what they want to do, determine the appropriate action
+2. Use `read_file` to examine documentation, config files, or source code when needed
+3. Use `run_shell_command` to execute commands - it will ask the user for confirmation
+4. Analyze the output and provide helpful explanations
+5. If a command fails, explain what went wrong and suggest fixes
+
+## Complex task workflow (e.g., "install this repo"):
+1. Clone the repository using `run_shell_command`
+2. Use `list_directory` to see what files exist
+3. Use `read_file` to read README.md, INSTALL.md, setup.py, requirements.txt, pyproject.toml, package.json, etc.
+4. Follow the installation instructions step by step, using `run_shell_command` for each step
+5. Each command requires user confirmation - this is intentional for safety
 
 ## Important rules:
-- Always use the `run_shell_command` tool to execute commands - never just suggest commands without executing
+- Always use the tools - never just suggest commands without executing
 - For dangerous operations (rm -rf, dd, format, etc.), warn the user in the explanation
 - If the request is ambiguous, ask clarifying questions before executing
 - Use the execution history to understand context (e.g., "do that again", "same but for X")
 - Keep responses concise - this is a command line interface
+- When installing projects, ALWAYS read the documentation first to understand requirements
 
 ## Context:
 - Shell: zsh
@@ -130,6 +144,112 @@ def confirm_execution(command: str, explanation: str, warning: str = None) -> tu
             return False, None
         else:
             print("Please enter 'y', 'n', or 'e'")
+
+
+def read_file(
+    file_path: Annotated[str, "Path to the file to read (relative to current directory or absolute)"],
+    max_lines: Annotated[int, "Maximum number of lines to read (default 200)"] = 200,
+) -> str:
+    """
+    Read the contents of a file.
+
+    Use this tool to read documentation (README.md, INSTALL.md), configuration files
+    (requirements.txt, setup.py, pyproject.toml, package.json), or any other text file.
+
+    Args:
+        file_path: Path to the file (relative or absolute)
+        max_lines: Maximum lines to read to avoid overwhelming context
+
+    Returns:
+        The file contents or an error message
+    """
+    try:
+        # Resolve path relative to current working directory
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = shell_state.cwd / path
+
+        if not path.exists():
+            return f"Error: File not found: {path}"
+
+        if not path.is_file():
+            return f"Error: Not a file: {path}"
+
+        # Check file size to avoid reading huge files
+        size = path.stat().st_size
+        if size > 1_000_000:  # 1MB limit
+            return f"Error: File too large ({size} bytes). Use shell commands to inspect it."
+
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+
+        if len(lines) > max_lines:
+            content = ''.join(lines[:max_lines])
+            return f"{content}\n\n[... truncated, showing first {max_lines} of {len(lines)} lines]"
+
+        return ''.join(lines)
+
+    except PermissionError:
+        return f"Error: Permission denied reading {file_path}"
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+def list_directory(
+    directory: Annotated[str, "Directory path to list (relative or absolute, defaults to current)"] = ".",
+    show_hidden: Annotated[bool, "Include hidden files (starting with .)"] = False,
+) -> str:
+    """
+    List contents of a directory.
+
+    Use this tool to see what files exist in a directory before reading them.
+
+    Args:
+        directory: Path to list (defaults to current working directory)
+        show_hidden: Whether to include hidden files
+
+    Returns:
+        List of files and directories with type indicators
+    """
+    try:
+        path = Path(directory)
+        if not path.is_absolute():
+            path = shell_state.cwd / path
+
+        if not path.exists():
+            return f"Error: Directory not found: {path}"
+
+        if not path.is_dir():
+            return f"Error: Not a directory: {path}"
+
+        entries = []
+        for item in sorted(path.iterdir()):
+            if not show_hidden and item.name.startswith('.'):
+                continue
+
+            if item.is_dir():
+                entries.append(f"[DIR]  {item.name}/")
+            elif item.is_symlink():
+                entries.append(f"[LINK] {item.name} -> {item.resolve()}")
+            else:
+                size = item.stat().st_size
+                if size < 1024:
+                    size_str = f"{size}B"
+                elif size < 1024 * 1024:
+                    size_str = f"{size // 1024}KB"
+                else:
+                    size_str = f"{size // (1024 * 1024)}MB"
+                entries.append(f"[FILE] {item.name} ({size_str})")
+
+        if not entries:
+            return f"Directory is empty: {path}"
+
+        return f"Contents of {path}:\n" + "\n".join(entries)
+
+    except PermissionError:
+        return f"Error: Permission denied accessing {directory}"
+    except Exception as e:
+        return f"Error listing directory: {e}"
 
 
 def run_shell_command(
@@ -354,10 +474,10 @@ class NLShell:
         global _llm_instance
         _llm_instance = self.llm
 
-        # Create the deep agent with our shell tool
+        # Create the deep agent with our tools
         self.agent = create_deep_agent(
             model=self.llm,
-            tools=[run_shell_command],
+            tools=[run_shell_command, read_file, list_directory],
             system_prompt=SYSTEM_PROMPT,
         )
 
