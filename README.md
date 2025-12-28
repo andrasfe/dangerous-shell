@@ -97,20 +97,9 @@ Edit `.env` to configure:
 # Required: Your OpenRouter API key
 OPENROUTER_API_KEY=sk-or-v1-xxxxx
 
-# Optional: Choose your model (defaults to Claude 3.5 Sonnet)
-OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+# Optional: Model to use (see https://openrouter.ai/models)
+OPENROUTER_MODEL=anthropic/claude-sonnet-4
 ```
-
-### Available Models
-
-| Model | ID | Notes |
-|-------|-----|-------|
-| Claude 3.5 Sonnet | `anthropic/claude-3.5-sonnet` | Recommended - fast and accurate |
-| GPT-4o | `openai/gpt-4o` | OpenAI's flagship |
-| Llama 3.1 70B | `meta-llama/llama-3.1-70b-instruct` | Open source, cost-effective |
-| Claude 3 Opus | `anthropic/claude-3-opus` | Most capable, slower |
-
-See all models: https://openrouter.ai/models
 
 ## Usage
 
@@ -186,6 +175,27 @@ When a command is suggested:
 - `y` / `yes` - Execute the command
 - `n` / `no` - Cancel
 - `e` / `edit` - Modify the command before executing
+
+### Auto-Fix on Error
+
+When a command fails, the shell offers to analyze and fix it:
+
+```
+nlsh:~$ gcc myprog.c
+
+gcc: error: myprog.c: No such file or directory
+✗ Command failed with exit code 1
+
+Would you like me to try to fix this? [y/n]: y
+(analyzing error...)
+
+Suggested fix: gcc myprogram.c -o myprogram
+Explanation: The file was named 'myprogram.c' not 'myprog.c', and added -o flag for output
+
+Run fixed command? [y/n/e(dit)]: y
+```
+
+The fix loop continues until the command succeeds or you decline further fixes.
 
 ## Files
 

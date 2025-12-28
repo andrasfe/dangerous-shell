@@ -186,46 +186,76 @@ def run_shell_command(
     if not should_execute:
         return "Command cancelled by user."
 
-    # Execute the command
-    print(f"\n\033[2mExecuting...\033[0m")
-    try:
-        result = subprocess.run(
-            final_command,
-            shell=True,
-            executable="/bin/zsh",
-            cwd=shell_state.cwd,
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
+    # Execute the command with fix loop
+    current_cmd = final_command
+    while True:
+        print(f"\n\033[2mExecuting...\033[0m")
+        try:
+            result = subprocess.run(
+                current_cmd,
+                shell=True,
+                executable="/bin/zsh",
+                cwd=shell_state.cwd,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
 
-        output_parts = []
-        if result.stdout:
-            print(result.stdout, end="")
-            output_parts.append(f"STDOUT:\n{result.stdout}")
-        if result.stderr:
-            print(f"\033[1;31m{result.stderr}\033[0m", end="")
-            output_parts.append(f"STDERR:\n{result.stderr}")
+            output_parts = []
+            if result.stdout:
+                print(result.stdout, end="")
+                output_parts.append(f"STDOUT:\n{result.stdout}")
+            if result.stderr:
+                print(f"\033[1;31m{result.stderr}\033[0m", end="")
+                output_parts.append(f"STDERR:\n{result.stderr}")
 
-        success = result.returncode == 0
-        if success:
-            print(f"\033[1;32m✓ Command completed successfully\033[0m")
-        else:
+            if result.returncode == 0:
+                print(f"\033[1;32m✓ Command completed successfully\033[0m")
+                log_command(natural_request, current_cmd, True)
+                shell_state.last_command = current_cmd
+                shell_state.last_output = result.stdout
+                return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
+
+            # Command failed
             print(f"\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
+            log_command(natural_request, current_cmd, False)
 
-        log_command(natural_request, final_command, success)
-        shell_state.last_command = final_command
-        shell_state.last_output = result.stdout
+            # Offer to fix the command
+            fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+            if fix_response not in ("y", "yes"):
+                return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
 
-        status = "SUCCESS" if success else f"FAILED (exit code {result.returncode})"
-        return f"Execution {status}\n" + "\n".join(output_parts) if output_parts else f"Execution {status} (no output)"
+            print("\033[2m(analyzing error...)\033[0m")
+            fix_result = fix_failed_command_standalone(current_cmd, result.stderr, result.returncode)
 
-    except subprocess.TimeoutExpired:
-        log_command(natural_request, final_command, False)
-        return "Command timed out after 5 minutes"
-    except Exception as e:
-        log_command(natural_request, final_command, False)
-        return f"Error executing command: {e}"
+            if not fix_result or not fix_result.get("fixed_command"):
+                print("\033[1;31mCouldn't determine a fix for this error.\033[0m")
+                return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
+
+            fixed_cmd = fix_result["fixed_command"]
+            fix_explanation = fix_result.get("explanation", "")
+
+            print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
+            print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
+
+            run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+            if run_fix in ("y", "yes"):
+                current_cmd = fixed_cmd
+                continue  # Re-run with fixed command
+            elif run_fix in ("e", "edit"):
+                edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                if edited:
+                    current_cmd = edited
+                    continue  # Re-run with edited command
+
+            return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
+
+        except subprocess.TimeoutExpired:
+            log_command(natural_request, current_cmd, False)
+            return "Command timed out after 5 minutes"
+        except Exception as e:
+            log_command(natural_request, current_cmd, False)
+            return f"Error executing command: {e}"
 
 
 def get_current_context() -> str:
@@ -238,51 +268,72 @@ def get_current_context() -> str:
 {history_str}"""
 
 
-# Common shell commands for detection
-SHELL_COMMANDS = {
-    'ls', 'cd', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'mkdir', 'rmdir',
-    'touch', 'echo', 'pwd', 'chmod', 'chown', 'ln', 'head', 'tail', 'less',
-    'more', 'wc', 'sort', 'uniq', 'cut', 'sed', 'awk', 'tr', 'xargs', 'tee',
-    'diff', 'tar', 'gzip', 'gunzip', 'zip', 'unzip', 'curl', 'wget', 'ssh',
-    'scp', 'rsync', 'git', 'docker', 'kubectl', 'npm', 'yarn', 'pip', 'python',
-    'python3', 'node', 'ruby', 'perl', 'java', 'make', 'cmake', 'gcc', 'clang',
-    'ps', 'kill', 'killall', 'top', 'htop', 'df', 'du', 'free', 'uname',
-    'whoami', 'which', 'whereis', 'man', 'history', 'alias', 'export', 'env',
-    'source', 'eval', 'exec', 'nohup', 'sudo', 'su', 'apt', 'apt-get', 'brew',
-    'yum', 'dnf', 'pacman', 'systemctl', 'journalctl', 'date', 'cal', 'sleep',
-    'watch', 'time', 'timeout', 'yes', 'true', 'false', 'test', 'stat', 'file',
-    'open', 'pbcopy', 'pbpaste', 'say', 'caffeinate', 'defaults', 'launchctl',
-}
+# Global LLM instance for fix_failed_command (initialized in NLShell)
+_llm_instance = None
+
+
+def fix_failed_command_standalone(command: str, stderr: str, returncode: int) -> dict | None:
+    """Use LLM to suggest a fix for a failed command."""
+    if _llm_instance is None:
+        return None
+
+    fix_prompt = f"""The following shell command failed:
+
+Command: {command}
+Exit code: {returncode}
+Error output:
+{stderr}
+
+Current directory: {shell_state.cwd}
+
+Please analyze the error and provide a FIXED version of the command.
+Respond with ONLY a JSON object in this format:
+{{
+    "fixed_command": "the corrected command",
+    "explanation": "brief explanation of what was wrong and how you fixed it"
+}}
+
+If the command cannot be fixed (e.g., file doesn't exist, permission issue that can't be resolved), set fixed_command to null."""
+
+    try:
+        response = _llm_instance.invoke(fix_prompt)
+        content = response.content.strip()
+
+        # Handle markdown code blocks
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1])
+
+        return json.loads(content)
+    except Exception:
+        return None
 
 
 def looks_like_shell_command(text: str) -> bool:
-    """Check if the input looks like a shell command rather than natural language."""
+    """Use LLM to check if input looks like a shell command rather than natural language."""
     text = text.strip()
     if not text:
         return False
 
-    # Get the first word
-    first_word = text.split()[0].lower()
+    # Need LLM instance to check
+    if _llm_instance is None:
+        return False
 
-    # Remove leading ./ or path
-    if first_word.startswith('./') or first_word.startswith('/'):
-        return True
+    prompt = f"""Determine if the following input is a shell command or natural language.
 
-    # Check if starts with a known command
-    if first_word in SHELL_COMMANDS:
-        return True
+Input: {text}
 
-    # Check for shell operators (pipes, redirects, etc.)
-    shell_operators = ['|', '>', '>>', '<', '&&', '||', ';', '$(', '`']
-    if any(op in text for op in shell_operators):
-        return True
+A shell command is something that can be directly executed in a terminal (like "ls -la", "git status", "docker ps").
+Natural language is a human request describing what they want (like "show me all files", "list running containers").
 
-    # Check for flags pattern (word followed by -something)
-    parts = text.split()
-    if len(parts) >= 2 and parts[1].startswith('-'):
-        return True
+Respond with ONLY "command" or "natural" (no other text)."""
 
-    return False
+    try:
+        response = _llm_instance.invoke(prompt)
+        answer = response.content.strip().lower()
+        return answer == "command"
+    except Exception:
+        return False
 
 
 class NLShell:
@@ -298,6 +349,10 @@ class NLShell:
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=0.1,
         )
+
+        # Set global LLM instance for standalone fix function
+        global _llm_instance
+        _llm_instance = self.llm
 
         # Create the deep agent with our shell tool
         self.agent = create_deep_agent(
@@ -324,6 +379,10 @@ class NLShell:
             readline.write_history_file(HISTORY_FILE)
         except Exception:
             pass
+
+    def fix_failed_command(self, command: str, stderr: str, returncode: int) -> dict | None:
+        """Use LLM to suggest a fix for a failed command."""
+        return fix_failed_command_standalone(command, stderr, returncode)
 
     def print_prompt(self):
         """Print the shell prompt."""
@@ -419,29 +478,63 @@ class NLShell:
                     os.system("clear")
                     continue
 
-                # Check if input looks like a shell command
+                # Check if input looks like a shell command (using LLM)
                 if looks_like_shell_command(user_input):
                     print(f"\n\033[1;33mThis looks like a shell command.\033[0m")
                     response = input("\033[1;32mRun as-is? [y/n/i(nterpret)]:\033[0m ").strip().lower()
                     if response in ("y", "yes"):
                         # Run directly
-                        result = subprocess.run(
-                            user_input,
-                            shell=True,
-                            executable="/bin/zsh",
-                            cwd=shell_state.cwd,
-                            capture_output=True,
-                            text=True
-                        )
-                        if result.stdout:
-                            print(result.stdout, end="")
-                        if result.stderr:
-                            print(f"\033[1;31m{result.stderr}\033[0m", end="")
-                        if result.returncode == 0:
-                            print(f"\033[1;32m✓ Command completed successfully\033[0m")
-                        else:
-                            print(f"\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
-                        log_command(user_input, user_input, result.returncode == 0)
+                        current_cmd = user_input
+                        while True:
+                            result = subprocess.run(
+                                current_cmd,
+                                shell=True,
+                                executable="/bin/zsh",
+                                cwd=shell_state.cwd,
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.stdout:
+                                print(result.stdout, end="")
+                            if result.stderr:
+                                print(f"\033[1;31m{result.stderr}\033[0m", end="")
+
+                            if result.returncode == 0:
+                                print(f"\033[1;32m✓ Command completed successfully\033[0m")
+                                log_command(user_input, current_cmd, True)
+                                break
+                            else:
+                                print(f"\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
+                                log_command(user_input, current_cmd, False)
+
+                                # Offer to fix the command
+                                fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+                                if fix_response not in ("y", "yes"):
+                                    break
+
+                                print("\033[2m(analyzing error...)\033[0m")
+                                fix_result = self.fix_failed_command(current_cmd, result.stderr, result.returncode)
+
+                                if not fix_result or not fix_result.get("fixed_command"):
+                                    print("\033[1;31mCouldn't determine a fix for this error.\033[0m")
+                                    break
+
+                                fixed_cmd = fix_result["fixed_command"]
+                                explanation = fix_result.get("explanation", "")
+
+                                print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
+                                print(f"\033[1;33mExplanation:\033[0m {explanation}")
+
+                                run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                                if run_fix in ("y", "yes"):
+                                    current_cmd = fixed_cmd
+                                    continue  # Re-run with fixed command
+                                elif run_fix in ("e", "edit"):
+                                    edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                                    if edited:
+                                        current_cmd = edited
+                                        continue  # Re-run with edited command
+                                break
                         continue
                     elif response in ("n", "no"):
                         print("\033[2mCancelled.\033[0m")
