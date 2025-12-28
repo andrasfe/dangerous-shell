@@ -1,0 +1,50 @@
+#!/bin/zsh
+# Natural Language Shell launcher
+
+SCRIPT_DIR="${0:A:h}"
+cd "$SCRIPT_DIR"
+
+# Find Python 3.11+ (required by deepagents)
+PYTHON_BIN=""
+for py in python3.13 python3.12 python3.11; do
+    if command -v $py &> /dev/null; then
+        PYTHON_BIN=$(command -v $py)
+        break
+    fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+    # Check homebrew paths
+    for py in /opt/homebrew/bin/python3.11 /usr/local/bin/python3.11; do
+        if [[ -x "$py" ]]; then
+            PYTHON_BIN="$py"
+            break
+        fi
+    done
+fi
+
+if [[ -z "$PYTHON_BIN" ]]; then
+    echo "Error: Python 3.11+ is required but not found"
+    echo "Install with: brew install python@3.11"
+    exit 1
+fi
+
+# Check if virtual environment exists, create if not
+if [[ ! -d ".venv" ]]; then
+    echo "Creating virtual environment with $PYTHON_BIN..."
+    $PYTHON_BIN -m venv .venv
+    source .venv/bin/activate
+    pip install --upgrade pip -q
+    pip install -q -r requirements.txt
+else
+    source .venv/bin/activate
+fi
+
+# Check for .env file
+if [[ ! -f ".env" ]]; then
+    echo "Error: .env file not found"
+    echo "Copy .env.example to .env and add your OpenRouter API key"
+    exit 1
+fi
+
+python3 nlshell.py "$@"
