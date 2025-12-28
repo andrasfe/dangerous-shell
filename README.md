@@ -244,7 +244,16 @@ The fix loop continues until the command succeeds or you decline further fixes.
 
 ### Secure Password Handling
 
-Commands requiring passwords (`sudo`, `ssh`, `scp`, etc.) run in **interactive mode**:
+Commands requiring passwords run in **interactive mode**, ensuring sensitive input is never exposed to the LLM.
+
+#### How it works
+
+When you run a command like `sudo`, `ssh`, or `scp`, the shell:
+
+1. Detects that the command may require a password
+2. Switches to interactive mode (no output capture)
+3. Runs the command with direct terminal access
+4. Your password goes straight to the subprocess
 
 ```
 nlsh:~$ install this package system-wide
@@ -256,16 +265,40 @@ Execute? [y/n/e(dit)]: y
 🔒 Interactive mode: Password input goes directly to the command (not captured)
 Executing interactively...
 
-Password: ********
+Password: ********     ← You type this directly to sudo, not to nlsh
 ✓ Command completed successfully
 ```
 
-**Security guarantees:**
-- Password is typed directly into the subprocess
-- Never captured by our code
-- Never logged to history
-- Never sent to the LLM
-- Output from interactive commands is not captured
+#### Commands that trigger interactive mode
+
+| Command | Why |
+|---------|-----|
+| `sudo` | System password |
+| `su` | User password |
+| `ssh`, `scp`, `sftp` | SSH password/passphrase |
+| `passwd` | Password change |
+| `docker login` | Registry credentials |
+| `npm login` | npm credentials |
+| `gh auth` | GitHub authentication |
+
+Any command containing `sudo` (e.g., `pip install foo && sudo systemctl restart`) also triggers interactive mode.
+
+#### Security guarantees
+
+| Concern | Protection |
+|---------|------------|
+| Password captured by nlsh? | **No** - subprocess runs without output capture |
+| Password logged to history? | **No** - only the command is logged, never stdin |
+| Password sent to LLM? | **No** - interactive mode output is not returned to agent |
+| Password visible in process list? | **No** - typed via terminal, not command args |
+
+#### Why this matters
+
+Normal commands capture stdout/stderr and return them to the LLM for analysis. In interactive mode:
+- No output capture occurs
+- The terminal is passed directly to the subprocess
+- The LLM only receives "Execution SUCCESS (interactive mode)" or failure status
+- Your secrets never leave your terminal
 
 ## Files
 
