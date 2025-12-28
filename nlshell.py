@@ -33,6 +33,28 @@ class ShellState:
         self.cwd = Path.cwd()
         self.last_command = None
         self.last_output = None
+        self.conversation_history = []  # Track conversation for context
+        self.max_history = 20  # Keep last N exchanges
+
+    def add_to_history(self, role: str, content: str):
+        """Add a message to conversation history."""
+        self.conversation_history.append({"role": role, "content": content})
+        # Trim old messages if needed
+        if len(self.conversation_history) > self.max_history * 2:
+            self.conversation_history = self.conversation_history[-self.max_history * 2:]
+
+    def get_conversation_context(self) -> str:
+        """Get recent conversation for context."""
+        if not self.conversation_history:
+            return ""
+
+        lines = ["Recent conversation:"]
+        for msg in self.conversation_history[-10:]:  # Last 10 messages
+            role = "You" if msg["role"] == "assistant" else "User"
+            # Truncate long messages
+            content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
+            lines.append(f"  {role}: {content}")
+        return "\n".join(lines)
 
 shell_state = ShellState()
 
@@ -76,7 +98,7 @@ Your primary function is to translate natural language requests into zsh shell c
 
 def load_recent_history(limit: int = HISTORY_CONTEXT_SIZE) -> list[dict]:
     """Load recent command history for context."""
-    history = []
+    history: list[dict] = []
     if not COMMAND_LOG_FILE.exists():
         return history
 
@@ -122,7 +144,7 @@ def log_command(natural_input: str, command: str, success: bool):
         pass
 
 
-def confirm_execution(command: str, explanation: str, warning: str = None) -> tuple[bool, str]:
+def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool, str | None]:
     """Ask user to confirm command execution."""
     print(f"\n\033[1;36mCommand:\033[0m {command}")
     print(f"\033[1;33mExplanation:\033[0m {explanation}")
@@ -300,7 +322,7 @@ def run_shell_command(
     parts = command.strip().split()
     if parts and parts[0] == "cd":
         should_execute, final_command = confirm_execution(command, explanation, warning)
-        if not should_execute:
+        if not should_execute or final_command is None:
             return "Command cancelled by user."
 
         try:
@@ -326,7 +348,7 @@ def run_shell_command(
     # Confirm before execution
     should_execute, final_command = confirm_execution(command, explanation, warning)
 
-    if not should_execute:
+    if not should_execute or final_command is None:
         return "Command cancelled by user."
 
     # Check if command requires interactive mode (for passwords)
@@ -341,6 +363,7 @@ def run_shell_command(
                 shell=True,
                 executable="/bin/zsh",
                 cwd=shell_state.cwd,
+                text=True,
                 timeout=600  # Longer timeout for interactive commands
             )
 
@@ -436,10 +459,17 @@ def get_current_context() -> str:
     """Get current shell context for the agent."""
     history = load_recent_history()
     history_str = format_history_context(history)
+    conversation_str = shell_state.get_conversation_context()
 
-    return f"""Current working directory: {shell_state.cwd}
+    parts = [f"Current working directory: {shell_state.cwd}"]
 
-{history_str}"""
+    if conversation_str:
+        parts.append(conversation_str)
+
+    if history_str:
+        parts.append(history_str)
+
+    return "\n\n".join(parts)
 
 
 # Global LLM instance for fix_failed_command (initialized in NLShell)
@@ -568,6 +598,9 @@ class NLShell:
 
     def process_input(self, user_input: str):
         """Process user input through the agent."""
+        # Save user message to conversation history
+        shell_state.add_to_history("user", user_input)
+
         context = get_current_context()
         full_input = f"{context}\n\nUser request: {user_input}"
 
@@ -579,8 +612,12 @@ class NLShell:
             # Get the final response
             final_message = result["messages"][-1]
             if hasattr(final_message, 'content') and final_message.content:
-                # Only print if there's meaningful content (not just tool results)
                 content = final_message.content.strip()
+
+                # Save assistant response to conversation history
+                shell_state.add_to_history("assistant", content)
+
+                # Only print if there's meaningful content (not just tool results)
                 if content and not content.startswith("Execution"):
                     print(f"\n\033[1;37m{content}\033[0m")
 
