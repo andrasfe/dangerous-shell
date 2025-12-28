@@ -252,6 +252,26 @@ def list_directory(
         return f"Error listing directory: {e}"
 
 
+# Commands that may require password input - run these interactively
+INTERACTIVE_COMMANDS = {'sudo', 'su', 'ssh', 'scp', 'sftp', 'passwd', 'kinit', 'docker login', 'npm login', 'gh auth'}
+
+
+def requires_interactive_mode(command: str) -> bool:
+    """Check if a command might require password input and should run interactively."""
+    cmd_lower = command.lower().strip()
+
+    # Check for commands that typically need passwords
+    for interactive_cmd in INTERACTIVE_COMMANDS:
+        if cmd_lower.startswith(interactive_cmd):
+            return True
+
+    # Check for password/passphrase prompts in piped commands
+    if 'sudo ' in cmd_lower or ' sudo ' in cmd_lower:
+        return True
+
+    return False
+
+
 def run_shell_command(
     command: Annotated[str, "The zsh shell command to execute"],
     explanation: Annotated[str, "Brief explanation of what this command does"],
@@ -263,6 +283,9 @@ def run_shell_command(
 
     This tool executes zsh commands on the user's system. The user will be shown
     the command and asked to confirm before execution.
+
+    Commands requiring passwords (sudo, ssh, etc.) run interactively - the password
+    goes directly to the subprocess and is NEVER captured, logged, or sent to the LLM.
 
     Args:
         command: The zsh shell command to execute
@@ -306,7 +329,38 @@ def run_shell_command(
     if not should_execute:
         return "Command cancelled by user."
 
-    # Execute the command with fix loop
+    # Check if command requires interactive mode (for passwords)
+    if requires_interactive_mode(final_command):
+        print(f"\n\033[1;35m🔒 Interactive mode: Password input goes directly to the command (not captured)\033[0m")
+        print(f"\033[2mExecuting interactively...\033[0m\n")
+        try:
+            # Run WITHOUT capture_output so password prompts work
+            # Password is NEVER seen by our code or the LLM
+            result = subprocess.run(
+                final_command,
+                shell=True,
+                executable="/bin/zsh",
+                cwd=shell_state.cwd,
+                timeout=600  # Longer timeout for interactive commands
+            )
+
+            if result.returncode == 0:
+                print(f"\n\033[1;32m✓ Command completed successfully\033[0m")
+                log_command(natural_request, final_command, True)
+                return "Execution SUCCESS (interactive mode - output not captured)"
+            else:
+                print(f"\n\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
+                log_command(natural_request, final_command, False)
+                return f"Execution FAILED (exit code {result.returncode}, interactive mode)"
+
+        except subprocess.TimeoutExpired:
+            log_command(natural_request, final_command, False)
+            return "Command timed out"
+        except Exception as e:
+            log_command(natural_request, final_command, False)
+            return f"Error executing command: {e}"
+
+    # Execute the command with fix loop (non-interactive)
     current_cmd = final_command
     while True:
         print(f"\n\033[2mExecuting...\033[0m")
@@ -567,18 +621,28 @@ class NLShell:
                 if user_input.startswith("!"):
                     direct_cmd = user_input[1:].strip()
                     if direct_cmd:
-                        result = subprocess.run(
-                            direct_cmd,
-                            shell=True,
-                            executable="/bin/zsh",
-                            cwd=shell_state.cwd,
-                            capture_output=True,
-                            text=True
-                        )
-                        if result.stdout:
-                            print(result.stdout, end="")
-                        if result.stderr:
-                            print(f"\033[1;31m{result.stderr}\033[0m", end="")
+                        if requires_interactive_mode(direct_cmd):
+                            # Interactive mode - password goes directly to subprocess
+                            print(f"\033[1;35m🔒 Interactive mode\033[0m")
+                            subprocess.run(
+                                direct_cmd,
+                                shell=True,
+                                executable="/bin/zsh",
+                                cwd=shell_state.cwd
+                            )
+                        else:
+                            result = subprocess.run(
+                                direct_cmd,
+                                shell=True,
+                                executable="/bin/zsh",
+                                cwd=shell_state.cwd,
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.stdout:
+                                print(result.stdout, end="")
+                            if result.stderr:
+                                print(f"\033[1;31m{result.stderr}\033[0m", end="")
                     continue
 
                 # Handle built-in commands
@@ -603,7 +667,24 @@ class NLShell:
                     print(f"\n\033[1;33mThis looks like a shell command.\033[0m")
                     response = input("\033[1;32mRun as-is? [y/n/i(nterpret)]:\033[0m ").strip().lower()
                     if response in ("y", "yes"):
-                        # Run directly
+                        # Check if interactive mode needed for passwords
+                        if requires_interactive_mode(user_input):
+                            print(f"\n\033[1;35m🔒 Interactive mode: Password input goes directly to the command (not captured)\033[0m\n")
+                            result = subprocess.run(
+                                user_input,
+                                shell=True,
+                                executable="/bin/zsh",
+                                cwd=shell_state.cwd
+                            )
+                            if result.returncode == 0:
+                                print(f"\n\033[1;32m✓ Command completed successfully\033[0m")
+                                log_command(user_input, user_input, True)
+                            else:
+                                print(f"\n\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
+                                log_command(user_input, user_input, False)
+                            continue
+
+                        # Run directly (non-interactive)
                         current_cmd = user_input
                         while True:
                             result = subprocess.run(

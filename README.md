@@ -30,6 +30,7 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Execution memory** - Remembers past commands; understands "do that again", "same but for X"
 - **Confirmation before execution** - Review, edit, or cancel commands before they run
 - **Auto-fix on error** - Analyzes failures and suggests fixes
+- **Secure password handling** - Passwords go directly to subprocess, never captured or sent to LLM
 - **Safety warnings** - Highlights dangerous operations (rm -rf, dd, etc.)
 - **Persistent history** - Logs all translations for future reference
 - **Direct mode** - Bypass agent with `!` prefix for regular commands
@@ -240,6 +241,31 @@ Run fixed command? [y/n/e(dit)]: y
 ```
 
 The fix loop continues until the command succeeds or you decline further fixes.
+
+### Secure Password Handling
+
+Commands requiring passwords (`sudo`, `ssh`, `scp`, etc.) run in **interactive mode**:
+
+```
+nlsh:~$ install this package system-wide
+
+Command: sudo pip install package
+Explanation: Install package globally (requires admin privileges)
+Execute? [y/n/e(dit)]: y
+
+🔒 Interactive mode: Password input goes directly to the command (not captured)
+Executing interactively...
+
+Password: ********
+✓ Command completed successfully
+```
+
+**Security guarantees:**
+- Password is typed directly into the subprocess
+- Never captured by our code
+- Never logged to history
+- Never sent to the LLM
+- Output from interactive commands is not captured
 
 ## Files
 
