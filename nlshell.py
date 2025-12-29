@@ -37,6 +37,7 @@ load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 VOICE_MODEL = os.getenv("OPENROUTER_VOICE_MODEL", "google/gemini-2.5-flash-lite")
+SHELL_EXECUTABLE = os.getenv("NLSH_SHELL", os.getenv("SHELL", "/bin/bash"))
 HISTORY_FILE = Path.home() / ".nlshell_history"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
@@ -110,9 +111,15 @@ Your primary function is to translate natural language requests into zsh shell c
 - When installing projects, ALWAYS read the documentation first to understand requirements
 
 ## Context:
-- Shell: zsh
+- Shell: {shell_name} (commands run via {shell_path})
 - Current working directory will be provided with each command
 - Execution history is available for context"""
+
+def get_system_prompt() -> str:
+    """Get the system prompt with current shell info."""
+    shell_name = Path(SHELL_EXECUTABLE).name
+    shell_path = SHELL_EXECUTABLE
+    return SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
 
 
 def load_recent_history(limit: int = HISTORY_CONTEXT_SIZE) -> list[dict]:
@@ -380,7 +387,7 @@ def run_shell_command(
             result = subprocess.run(
                 final_command,
                 shell=True,
-                executable="/bin/zsh",
+                executable=SHELL_EXECUTABLE,
                 cwd=shell_state.cwd,
                 text=True,
                 timeout=600  # Longer timeout for interactive commands
@@ -410,7 +417,7 @@ def run_shell_command(
             result = subprocess.run(
                 current_cmd,
                 shell=True,
-                executable="/bin/zsh",
+                executable=SHELL_EXECUTABLE,
                 cwd=shell_state.cwd,
                 capture_output=True,
                 text=True,
@@ -695,7 +702,7 @@ class NLShell:
         self.agent = create_deep_agent(
             model=self.llm,
             tools=[run_shell_command, read_file, list_directory],
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=get_system_prompt(),
         )
 
         self._setup_readline()
@@ -790,7 +797,8 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
-        print("\033[1;36m║   Shell: zsh | Memory: on                  ║\033[0m")
+        shell_name = Path(SHELL_EXECUTABLE).name
+        print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
         if AUDIO_AVAILABLE:
             print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
@@ -824,14 +832,14 @@ Respond conversationally. Be concise but helpful."""
                             subprocess.run(
                                 direct_cmd,
                                 shell=True,
-                                executable="/bin/zsh",
+                                executable=SHELL_EXECUTABLE,
                                 cwd=shell_state.cwd
                             )
                         else:
                             result = subprocess.run(
                                 direct_cmd,
                                 shell=True,
-                                executable="/bin/zsh",
+                                executable=SHELL_EXECUTABLE,
                                 cwd=shell_state.cwd,
                                 capture_output=True,
                                 text=True
@@ -892,7 +900,7 @@ Respond conversationally. Be concise but helpful."""
                             result = subprocess.run(
                                 user_input,
                                 shell=True,
-                                executable="/bin/zsh",
+                                executable=SHELL_EXECUTABLE,
                                 cwd=shell_state.cwd
                             )
                             if result.returncode == 0:
@@ -909,7 +917,7 @@ Respond conversationally. Be concise but helpful."""
                             result = subprocess.run(
                                 current_cmd,
                                 shell=True,
-                                executable="/bin/zsh",
+                                executable=SHELL_EXECUTABLE,
                                 cwd=shell_state.cwd,
                                 capture_output=True,
                                 text=True

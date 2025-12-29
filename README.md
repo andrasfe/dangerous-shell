@@ -1,6 +1,6 @@
 # Multimodal Natural Language Shell (nlsh)
 
-An intelligent shell powered by **LangChain DeepAgents** that translates natural language into zsh commands. Uses OpenRouter for LLM access. Always confirms before executing.
+An intelligent shell powered by **LangChain DeepAgents** that translates natural language into shell commands (bash/zsh). Uses OpenRouter for LLM access. Always confirms before executing.
 
 ---
 
@@ -75,7 +75,7 @@ By using this software, you acknowledge that you understand these risks and acce
                                 │
                                 ▼
                     ┌─────────────────────────┐
-                    │   zsh Execution         │
+                    │   Shell Execution       │
                     └─────────────────────────┘
 ```
 
@@ -133,7 +133,7 @@ python nlshell.py
 ║   Powered by LangChain DeepAgents          ║
 ║   Type 'exit' or 'quit' to leave           ║
 ║   Type '!' prefix for direct commands      ║
-║   Shell: zsh | Memory: on                  ║
+║   Shell: bash | Memory: on                 ║
 ║   Model: anthropic/claude-3.5-sonnet       ║
 ║   History: 15 commands loaded              ║
 ╚════════════════════════════════════════════╝
@@ -343,7 +343,7 @@ Normal commands capture stdout/stderr and return them to the LLM for analysis. I
 2. The DeepAgent processes your request with execution history context
 3. The agent calls the `run_shell_command` tool with the command and explanation
 4. You review and confirm the command
-5. The command executes via `/bin/zsh`
+5. The command executes via your shell (bash/zsh)
 6. Output is displayed with success/failure status
 7. The agent can analyze results and suggest follow-ups
 
