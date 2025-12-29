@@ -596,6 +596,29 @@ class NLShell:
             display_path = "~" + display_path[len(home):]
         print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
 
+    def chat(self, message: str):
+        """Chat with the LLM without executing commands."""
+        shell_state.add_to_history("user", message)
+
+        context = shell_state.get_conversation_context()
+        chat_prompt = f"""You are a helpful assistant in a shell environment. The user is asking a question or having a conversation - they do NOT want you to execute any commands.
+
+Current directory: {shell_state.cwd}
+
+{context}
+
+User: {message}
+
+Respond conversationally. Be concise but helpful."""
+
+        try:
+            response = self.llm.invoke(chat_prompt)
+            reply = response.content if hasattr(response, 'content') else str(response)
+            shell_state.add_to_history("assistant", reply)
+            print(f"\n{reply}")
+        except Exception as e:
+            print(f"\n\033[1;31mError: {e}\033[0m")
+
     def process_input(self, user_input: str):
         """Process user input through the agent."""
         # Save user message to conversation history
@@ -632,6 +655,7 @@ class NLShell:
         print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
         print("\033[1;36m║   Type 'exit' or 'quit' to leave           ║\033[0m")
         print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
+        print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Shell: zsh | Memory: on                  ║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
         print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
@@ -680,6 +704,13 @@ class NLShell:
                                 print(result.stdout, end="")
                             if result.stderr:
                                 print(f"\033[1;31m{result.stderr}\033[0m", end="")
+                    continue
+
+                # Handle chat mode (bypass agent, just conversation)
+                if user_input.startswith("?"):
+                    chat_msg = user_input[1:].strip()
+                    if chat_msg:
+                        self.chat(chat_msg)
                     continue
 
                 # Handle built-in commands

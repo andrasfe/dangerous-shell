@@ -211,6 +211,7 @@ Run as-is? [y/n/i(nterpret)]:
 |---------|-------------|
 | `exit` / `quit` / `q` | Exit the shell |
 | `!<command>` | Execute command directly (bypass agent) |
+| `?<message>` | Chat with LLM (no command execution) |
 | `history` | Show past natural language translations |
 | `clear` | Clear the screen |
 
