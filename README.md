@@ -1,4 +1,4 @@
-# Natural Language Shell (nlsh)
+# Multimodal Natural Language Shell (nlsh)
 
 An intelligent shell powered by **LangChain DeepAgents** that translates natural language into zsh commands. Uses OpenRouter for LLM access. Always confirms before executing.
 
