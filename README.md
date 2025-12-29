@@ -24,6 +24,7 @@ By using this software, you acknowledge that you understand these risks and acce
 ## Features
 
 - **Natural language input** - Describe what you want in plain English
+- **Voice input** - Speak your commands using Gemini for speech-to-text
 - **File reading** - Reads READMEs, configs, and docs to understand how to install/configure projects
 - **Complex task handling** - Can clone repos and follow installation instructions step by step
 - **DeepAgents powered** - Built on LangChain's agentic framework with planning capabilities
@@ -34,6 +35,7 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Safety warnings** - Highlights dangerous operations (rm -rf, dd, etc.)
 - **Persistent history** - Logs all translations for future reference
 - **Direct mode** - Bypass agent with `!` prefix for regular commands
+- **Chat mode** - Ask questions with `?` prefix without executing commands
 - **Configurable model** - Use any LLM available on OpenRouter
 
 ## Architecture
@@ -212,6 +214,7 @@ Run as-is? [y/n/i(nterpret)]:
 | `exit` / `quit` / `q` | Exit the shell |
 | `!<command>` | Execute command directly (bypass agent) |
 | `?<message>` | Chat with LLM (no command execution) |
+| `v` | Voice input mode (speak your command) |
 | `history` | Show past natural language translations |
 | `clear` | Clear the screen |
 
@@ -221,6 +224,29 @@ When a command is suggested:
 - `y` / `yes` - Execute the command
 - `n` / `no` - Cancel
 - `e` / `edit` - Modify the command before executing
+
+### Voice Input
+
+Type `v` to enter voice mode:
+
+```
+nlsh:~$ v
+🎤 Recording... (press Enter to stop)
+
+(transcribing...)
+You said: list all python files in this directory
+
+Command: find . -name "*.py" -type f
+Explanation: Find all Python files in the current directory tree
+Execute? [y/n/e(dit)]: y
+```
+
+Voice input uses Gemini for speech-to-text transcription via OpenRouter. The transcribed text is then processed as normal natural language input.
+
+**Requirements:**
+- `sounddevice` and `numpy` packages (included in requirements.txt)
+- Working microphone
+- OpenRouter API key (same as for the main LLM)
 
 ### Auto-Fix on Error
 

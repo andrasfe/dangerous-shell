@@ -9,13 +9,26 @@ import sys
 import json
 import subprocess
 import readline
+import base64
+import tempfile
+import io
+import wave
 from pathlib import Path
 from datetime import datetime
 from typing import Annotated
 
+import requests
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
+
+# Audio imports (optional - graceful fallback if not available)
+try:
+    import sounddevice as sd
+    import numpy as np
+    AUDIO_AVAILABLE = True
+except ImportError:
+    AUDIO_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -23,9 +36,15 @@ load_dotenv()
 # Configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+VOICE_MODEL = os.getenv("OPENROUTER_VOICE_MODEL", "google/gemini-2.5-flash-lite")
 HISTORY_FILE = Path.home() / ".nlshell_history"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
+
+# Audio settings
+AUDIO_SAMPLE_RATE = 16000  # 16kHz for speech recognition
+AUDIO_CHANNELS = 1  # Mono
+AUDIO_MAX_DURATION = 30  # Max recording duration in seconds
 
 # Global state for the shell
 class ShellState:
@@ -513,6 +532,120 @@ If the command cannot be fixed (e.g., file doesn't exist, permission issue that 
         return None
 
 
+def record_audio() -> bytes | None:
+    """Record audio from microphone until Enter is pressed.
+
+    Returns WAV audio data as bytes, or None if recording failed.
+    """
+    if not AUDIO_AVAILABLE:
+        print("\033[1;31mError: Audio not available. Install sounddevice and numpy.\033[0m")
+        return None
+
+    print("\033[1;35m🎤 Recording... (press Enter to stop)\033[0m")
+
+    audio_data = []
+    recording = True
+
+    def callback(indata, frames, time, status):
+        if recording:
+            audio_data.append(indata.copy())
+
+    try:
+        with sd.InputStream(samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS,
+                           dtype='int16', callback=callback):
+            input()  # Wait for Enter key
+            recording = False
+
+        if not audio_data:
+            print("\033[1;31mNo audio recorded.\033[0m")
+            return None
+
+        # Combine all audio chunks
+        audio_array = np.concatenate(audio_data, axis=0)
+
+        # Convert to WAV format
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(AUDIO_CHANNELS)
+            wav_file.setsampwidth(2)  # 16-bit = 2 bytes
+            wav_file.setframerate(AUDIO_SAMPLE_RATE)
+            wav_file.writeframes(audio_array.tobytes())
+
+        wav_buffer.seek(0)
+        return wav_buffer.read()
+
+    except Exception as e:
+        print(f"\033[1;31mRecording error: {e}\033[0m")
+        return None
+
+
+def transcribe_audio(audio_data: bytes) -> str | None:
+    """Transcribe audio using Gemini via OpenRouter.
+
+    Args:
+        audio_data: WAV audio data as bytes
+
+    Returns:
+        Transcribed text, or None if transcription failed.
+    """
+    # Encode audio as base64
+    audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+
+    # Call OpenRouter with Gemini for transcription
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": VOICE_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Transcribe this audio exactly. Output ONLY the transcribed text, nothing else. If the audio is unclear or empty, respond with just: [unclear]"
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": audio_base64,
+                            "format": "wav"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        print("\033[2m(transcribing...)\033[0m")
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        transcription = result["choices"][0]["message"]["content"].strip()
+
+        if transcription == "[unclear]" or not transcription:
+            print("\033[1;33mCouldn't understand the audio.\033[0m")
+            return None
+
+        return transcription
+
+    except requests.exceptions.RequestException as e:
+        print(f"\033[1;31mTranscription error: {e}\033[0m")
+        return None
+    except (KeyError, IndexError) as e:
+        print(f"\033[1;31mInvalid response from transcription service.\033[0m")
+        return None
+
+
 def looks_like_shell_command(text: str) -> bool:
     """Use LLM to check if input looks like a shell command rather than natural language."""
     text = text.strip()
@@ -656,8 +789,11 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type 'exit' or 'quit' to leave           ║\033[0m")
         print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
+        print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         print("\033[1;36m║   Shell: zsh | Memory: on                  ║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
+        if AUDIO_AVAILABLE:
+            print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
         print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
         print("\033[1;36m╚════════════════════════════════════════════╝\033[0m")
 
@@ -711,6 +847,21 @@ Respond conversationally. Be concise but helpful."""
                     chat_msg = user_input[1:].strip()
                     if chat_msg:
                         self.chat(chat_msg)
+                    continue
+
+                # Handle voice input mode
+                if user_input.lower() == "v":
+                    if not AUDIO_AVAILABLE:
+                        print("\033[1;31mVoice input not available. Install: pip install sounddevice numpy\033[0m")
+                        continue
+
+                    audio_data = record_audio()
+                    if audio_data:
+                        transcription = transcribe_audio(audio_data)
+                        if transcription:
+                            print(f"\033[1;36mYou said:\033[0m {transcription}")
+                            # Process the transcribed text as normal input
+                            self.process_input(transcription)
                     continue
 
                 # Handle built-in commands
