@@ -30,6 +30,14 @@ try:
 except ImportError:
     AUDIO_AVAILABLE = False
 
+# Remote client import
+try:
+    from remote_client import RemoteClient
+    import asyncio
+    REMOTE_AVAILABLE = True
+except ImportError:
+    REMOTE_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -42,6 +50,11 @@ HISTORY_FILE = Path.home() / ".nlshell_history"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
 
+# Remote execution configuration
+REMOTE_HOST = os.getenv("NLSH_REMOTE_HOST")
+REMOTE_PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
+REMOTE_SECRET = os.getenv("NLSH_SHARED_SECRET")
+
 # Audio settings
 AUDIO_SAMPLE_RATE = 16000  # 16kHz for speech recognition
 AUDIO_CHANNELS = 1  # Mono
@@ -49,6 +62,10 @@ AUDIO_MAX_DURATION = 30  # Max recording duration in seconds
 
 # Runtime flags (set via command line args)
 SKIP_PERMISSIONS = False  # --dangerously-skip-permissions
+REMOTE_MODE = False  # --remote
+
+# Global remote client (initialized when --remote is used)
+_remote_client = None
 
 # Global state for the shell
 class ShellState:
@@ -312,6 +329,34 @@ def list_directory(
 INTERACTIVE_COMMANDS = {'sudo', 'su', 'ssh', 'scp', 'sftp', 'passwd', 'kinit', 'docker login', 'npm login', 'gh auth'}
 
 
+def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, str, str, int]:
+    """Execute a command on the remote server.
+
+    Args:
+        command: The command to execute
+        cwd: Working directory (optional)
+
+    Returns:
+        Tuple of (success, stdout, stderr, returncode)
+    """
+    if not REMOTE_AVAILABLE or _remote_client is None:
+        return False, "", "Remote client not available", -1
+
+    async def _run():
+        async with RemoteClient(
+            host=REMOTE_HOST,
+            port=REMOTE_PORT,
+            shared_secret=REMOTE_SECRET
+        ) as client:
+            result = await client.execute_command(command, cwd=cwd)
+            return result.success, result.stdout, result.stderr, result.returncode
+
+    try:
+        return asyncio.run(_run())
+    except Exception as e:
+        return False, "", str(e), -1
+
+
 def requires_interactive_mode(command: str) -> bool:
     """Check if a command might require password input and should run interactively."""
     cmd_lower = command.lower().strip()
@@ -385,8 +430,8 @@ def run_shell_command(
     if not should_execute or final_command is None:
         return "Command cancelled by user."
 
-    # Check if command requires interactive mode (for passwords)
-    if requires_interactive_mode(final_command):
+    # Check if command requires interactive mode (for passwords) - not supported in remote mode
+    if requires_interactive_mode(final_command) and not REMOTE_MODE:
         print(f"\n\033[1;35m🔒 Interactive mode: Password input goes directly to the command (not captured)\033[0m")
         print(f"\033[2mExecuting interactively...\033[0m\n")
         try:
@@ -417,39 +462,53 @@ def run_shell_command(
             log_command(natural_request, final_command, False)
             return f"Error executing command: {e}"
 
-    # Execute the command with fix loop (non-interactive)
+    # Execute the command with fix loop
     current_cmd = final_command
     while True:
-        print(f"\n\033[2mExecuting...\033[0m")
+        if REMOTE_MODE:
+            print(f"\n\033[2mExecuting on remote ({REMOTE_HOST})...\033[0m")
+        else:
+            print(f"\n\033[2mExecuting...\033[0m")
         try:
-            result = subprocess.run(
-                current_cmd,
-                shell=True,
-                executable=SHELL_EXECUTABLE,
-                cwd=shell_state.cwd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            # Execute locally or remotely based on mode
+            if REMOTE_MODE:
+                success, stdout, stderr, returncode = execute_remote_command(
+                    current_cmd,
+                    cwd=str(shell_state.cwd) if shell_state.cwd else None
+                )
+            else:
+                proc_result = subprocess.run(
+                    current_cmd,
+                    shell=True,
+                    executable=SHELL_EXECUTABLE,
+                    cwd=shell_state.cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                success = proc_result.returncode == 0
+                stdout = proc_result.stdout
+                stderr = proc_result.stderr
+                returncode = proc_result.returncode
 
             output_parts = []
-            if result.stdout:
-                print(result.stdout, end="")
-                output_parts.append(f"STDOUT:\n{result.stdout}")
-            if result.stderr:
-                print(f"\033[1;31m{result.stderr}\033[0m", end="")
-                output_parts.append(f"STDERR:\n{result.stderr}")
+            if stdout:
+                print(stdout, end="")
+                output_parts.append(f"STDOUT:\n{stdout}")
+            if stderr:
+                print(f"\033[1;31m{stderr}\033[0m", end="")
+                output_parts.append(f"STDERR:\n{stderr}")
 
-            if result.returncode == 0:
+            if returncode == 0:
                 print(f"\033[1;32m✓ Command completed successfully\033[0m")
                 log_command(natural_request, current_cmd, True)
                 shell_state.last_command = current_cmd
-                shell_state.last_output = result.stdout
+                shell_state.last_output = stdout
 
                 # Check for suggested next command
-                full_output = result.stdout or ""
-                if result.stderr:
-                    full_output += "\n" + result.stderr
+                full_output = stdout or ""
+                if stderr:
+                    full_output += "\n" + stderr
 
                 suggestion = suggest_next_command(current_cmd, full_output, natural_request)
                 if suggestion:
@@ -474,7 +533,7 @@ def run_shell_command(
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
             # Command failed
-            print(f"\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
+            print(f"\033[1;31m✗ Command failed with exit code {returncode}\033[0m")
             log_command(natural_request, current_cmd, False)
 
             # Offer to fix the command
@@ -483,14 +542,14 @@ def run_shell_command(
             else:
                 fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
-                return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
+                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
 
             print("\033[2m(analyzing error...)\033[0m")
-            fix_result = fix_failed_command_standalone(current_cmd, result.stderr, result.returncode)
+            fix_result = fix_failed_command_standalone(current_cmd, stderr, returncode)
 
             if not fix_result or not fix_result.get("fixed_command"):
                 print("\033[1;31mCouldn't determine a fix for this error.\033[0m")
-                return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
+                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
 
             fixed_cmd = fix_result["fixed_command"]
             fix_explanation = fix_result.get("explanation", "")
@@ -837,7 +896,10 @@ class NLShell:
         home = str(Path.home())
         if display_path.startswith(home):
             display_path = "~" + display_path[len(home):]
-        print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+        if REMOTE_MODE:
+            print(f"\n\033[1;35mnlsh\033[0m[\033[1;33mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+        else:
+            print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
 
     def chat(self, message: str):
         """Chat with the LLM without executing commands."""
@@ -901,7 +963,10 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
-        print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
+        if REMOTE_MODE:
+            print(f"\033[1;36m║   Mode: REMOTE ({REMOTE_HOST}:{REMOTE_PORT}){' ' * max(0, 20 - len(REMOTE_HOST) - len(str(REMOTE_PORT)))}║\033[0m")
+        else:
+            print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
         if AUDIO_AVAILABLE:
             print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
@@ -929,7 +994,17 @@ Respond conversationally. Be concise but helpful."""
                 if user_input.startswith("!"):
                     direct_cmd = user_input[1:].strip()
                     if direct_cmd:
-                        if requires_interactive_mode(direct_cmd):
+                        if REMOTE_MODE:
+                            # Remote execution
+                            success, stdout, stderr, returncode = execute_remote_command(
+                                direct_cmd,
+                                cwd=str(shell_state.cwd) if shell_state.cwd else None
+                            )
+                            if stdout:
+                                print(stdout, end="")
+                            if stderr:
+                                print(f"\033[1;31m{stderr}\033[0m", end="")
+                        elif requires_interactive_mode(direct_cmd):
                             # Interactive mode - password goes directly to subprocess
                             print(f"\033[1;35m🔒 Interactive mode\033[0m")
                             subprocess.run(
@@ -1089,7 +1164,7 @@ Respond conversationally. Be concise but helpful."""
 
 
 def main():
-    global SKIP_PERMISSIONS
+    global SKIP_PERMISSIONS, REMOTE_MODE, _remote_client
 
     parser = argparse.ArgumentParser(
         description="Natural Language Shell - An intelligent shell powered by LangChain DeepAgents"
@@ -1099,12 +1174,33 @@ def main():
         action="store_true",
         help="DANGEROUS: Skip all confirmation prompts and auto-execute commands"
     )
+    parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Execute commands on remote server (requires NLSH_REMOTE_HOST, NLSH_REMOTE_PORT, NLSH_SHARED_SECRET in .env)"
+    )
     args = parser.parse_args()
 
     if args.dangerously_skip_permissions:
         SKIP_PERMISSIONS = True
         print("\033[1;31m⚠️  WARNING: Running with --dangerously-skip-permissions\033[0m")
         print("\033[1;31m⚠️  All commands will be executed WITHOUT confirmation!\033[0m")
+        print()
+
+    if args.remote:
+        if not REMOTE_AVAILABLE:
+            print("\033[1;31mError: Remote execution not available. Check remote_client.py import.\033[0m")
+            sys.exit(1)
+        if not REMOTE_HOST:
+            print("\033[1;31mError: NLSH_REMOTE_HOST not set in .env\033[0m")
+            sys.exit(1)
+        if not REMOTE_SECRET:
+            print("\033[1;31mError: NLSH_SHARED_SECRET not set in .env\033[0m")
+            sys.exit(1)
+
+        REMOTE_MODE = True
+        _remote_client = True  # Flag that remote is configured
+        print(f"\033[1;35m🌐 Remote mode: Commands will execute on {REMOTE_HOST}:{REMOTE_PORT}\033[0m")
         print()
 
     shell = NLShell()
