@@ -437,6 +437,27 @@ def run_shell_command(
                 log_command(natural_request, current_cmd, True)
                 shell_state.last_command = current_cmd
                 shell_state.last_output = result.stdout
+
+                # Check for suggested next command
+                full_output = result.stdout or ""
+                if result.stderr:
+                    full_output += "\n" + result.stderr
+
+                suggestion = suggest_next_command(current_cmd, full_output, natural_request)
+                if suggestion:
+                    print(f"\n\033[1;36mSuggested next:\033[0m {suggestion['command']}")
+                    print(f"\033[1;33mReason:\033[0m {suggestion['explanation']}")
+
+                    next_response = input("\n\033[1;32mRun next command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                    if next_response in ("y", "yes"):
+                        current_cmd = suggestion['command']
+                        continue  # Run the suggested command
+                    elif next_response in ("e", "edit"):
+                        edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                        if edited:
+                            current_cmd = edited
+                            continue  # Run the edited command
+
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
             # Command failed
@@ -535,6 +556,62 @@ If the command cannot be fixed (e.g., file doesn't exist, permission issue that 
             content = "\n".join(lines[1:-1])
 
         return json.loads(content)
+    except Exception:
+        return None
+
+
+def suggest_next_command(command: str, output: str, natural_request: str) -> dict | None:
+    """Analyze command output and suggest a logical next command.
+
+    Args:
+        command: The command that was executed
+        output: The command output (stdout + stderr)
+        natural_request: The original user request
+
+    Returns:
+        Dict with 'command' and 'explanation' keys, or None if no suggestion.
+    """
+    if _llm_instance is None:
+        return None
+
+    # Truncate output if too long
+    max_output = 2000
+    if len(output) > max_output:
+        output = output[:max_output] + "\n... (truncated)"
+
+    prompt = f"""Based on this command execution, determine if there's a logical next command to suggest.
+
+Original user request: {natural_request}
+Command executed: {command}
+Output:
+{output}
+
+If there's a clear, helpful next step based on the output, respond with JSON:
+{{"command": "the next command", "explanation": "why this is the logical next step"}}
+
+Only suggest a command if:
+- The output clearly indicates a next step (e.g., "run npm install", compilation succeeded so run the binary, git status shows changes to commit)
+- It's directly related to the user's original goal
+- It's a safe, non-destructive command
+
+If there's no clear next step or the task appears complete, respond with:
+{{"command": null, "explanation": null}}
+
+Respond ONLY with valid JSON, no other text."""
+
+    try:
+        response = _llm_instance.invoke(prompt)
+        content = response.content.strip()
+
+        # Handle markdown code blocks
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1])
+
+        result = json.loads(content)
+        if result.get("command"):
+            return result
+        return None
     except Exception:
         return None
 

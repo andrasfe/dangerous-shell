@@ -31,6 +31,7 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Execution memory** - Remembers past commands; understands "do that again", "same but for X"
 - **Confirmation before execution** - Review, edit, or cancel commands before they run
 - **Auto-fix on error** - Analyzes failures and suggests fixes
+- **Smart follow-up** - Suggests logical next commands based on output
 - **Secure password handling** - Passwords go directly to subprocess, never captured or sent to LLM
 - **Safety warnings** - Highlights dangerous operations (rm -rf, dd, etc.)
 - **Persistent history** - Logs all translations for future reference
@@ -268,6 +269,35 @@ Run fixed command? [y/n/e(dit)]: y
 ```
 
 The fix loop continues until the command succeeds or you decline further fixes.
+
+### Smart Follow-up Suggestions
+
+After a command runs successfully, the shell analyzes the output and may suggest a logical next command:
+
+```
+nlsh:~$ git status
+
+On branch main
+Changes not staged for commit:
+  modified:   nlshell.py
+
+✓ Command completed successfully
+
+Suggested next: git add nlshell.py
+Reason: Stage the modified file for commit
+
+Run next command? [y/n/e(dit)]: y
+
+Executing...
+✓ Command completed successfully
+
+Suggested next: git commit -m "Update nlshell.py"
+Reason: Commit the staged changes
+
+Run next command? [y/n/e(dit)]: y
+```
+
+This creates a natural workflow where you can chain related commands together.
 
 ### Secure Password Handling
 
