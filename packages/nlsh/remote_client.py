@@ -7,6 +7,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Callable
 
+import ssl as ssl_module
 import websockets
 from websockets.exceptions import ConnectionClosed
 
@@ -30,7 +31,9 @@ class RemoteClient:
         host: str,
         port: int,
         shared_secret: str,
-        timeout: float = 30.0
+        timeout: float = 30.0,
+        ssl: bool = False,
+        ssl_verify: bool = True
     ):
         """Initialize remote client.
 
@@ -39,13 +42,25 @@ class RemoteClient:
             port: Remote server port
             shared_secret: Shared secret for HMAC authentication
             timeout: Connection timeout in seconds
+            ssl: Use SSL/TLS (wss://) connection
+            ssl_verify: Verify SSL certificate (set False for self-signed certs)
         """
         self.host = host
         self.port = port
         self.shared_secret = shared_secret
         self.timeout = timeout
-        self.ws_url = f"ws://{host}:{port}/ws"
+        self.ssl = ssl
+        self.ssl_verify = ssl_verify
+        protocol = "wss" if ssl else "ws"
+        self.ws_url = f"{protocol}://{host}:{port}/ws"
         self._websocket = None
+        self._ssl_context = None
+
+        if ssl:
+            self._ssl_context = ssl_module.create_default_context()
+            if not ssl_verify:
+                self._ssl_context.check_hostname = False
+                self._ssl_context.verify_mode = ssl_module.CERT_NONE
 
     async def connect(self) -> bool:
         """Connect to the remote server.
@@ -55,7 +70,7 @@ class RemoteClient:
         """
         try:
             self._websocket = await asyncio.wait_for(
-                websockets.connect(self.ws_url),
+                websockets.connect(self.ws_url, ssl=self._ssl_context),
                 timeout=self.timeout
             )
             return True
@@ -228,6 +243,8 @@ def create_client_from_env() -> RemoteClient:
         NLSH_REMOTE_HOST: Remote server host
         NLSH_REMOTE_PORT: Remote server port
         NLSH_SHARED_SECRET: Shared secret for authentication
+        NLSH_SSL: Enable SSL (true/false, default: false)
+        NLSH_SSL_VERIFY: Verify SSL cert (true/false, default: true)
 
     Returns:
         Configured RemoteClient instance
@@ -235,6 +252,8 @@ def create_client_from_env() -> RemoteClient:
     host = os.getenv("NLSH_REMOTE_HOST")
     port = os.getenv("NLSH_REMOTE_PORT")
     secret = os.getenv("NLSH_SHARED_SECRET")
+    ssl_enabled = os.getenv("NLSH_SSL", "false").lower() in ("true", "1", "yes")
+    ssl_verify = os.getenv("NLSH_SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
     if not host:
         raise ValueError("NLSH_REMOTE_HOST not set")
@@ -246,7 +265,9 @@ def create_client_from_env() -> RemoteClient:
     return RemoteClient(
         host=host,
         port=int(port),
-        shared_secret=secret
+        shared_secret=secret,
+        ssl=ssl_enabled,
+        ssl_verify=ssl_verify
     )
 
 
