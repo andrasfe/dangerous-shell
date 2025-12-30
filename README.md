@@ -34,10 +34,11 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Smart follow-up** - Suggests logical next commands based on output
 - **Secure password handling** - Passwords go directly to subprocess, never captured or sent to LLM
 - **Safety warnings** - Highlights dangerous operations (rm -rf, dd, etc.)
-- **Persistent history** - Logs all translations for future reference
+- **Persistent history** - Arrow keys navigate command history across sessions
 - **Direct mode** - Bypass agent with `!` prefix for regular commands
 - **Chat mode** - Ask questions with `?` prefix without executing commands
 - **Configurable model** - Use any LLM available on OpenRouter
+- **Automation mode** - `--dangerously-skip-permissions` flag for scripting
 
 ## Architecture
 
@@ -114,6 +115,9 @@ OPENROUTER_API_KEY=sk-or-v1-xxxxx
 
 # Optional: Model to use (see https://openrouter.ai/models)
 OPENROUTER_MODEL=anthropic/claude-sonnet-4
+
+# Optional: Voice input model for speech-to-text
+OPENROUTER_VOICE_MODEL=google/gemini-2.5-flash-lite
 ```
 
 ## Usage
@@ -124,7 +128,17 @@ OPENROUTER_MODEL=anthropic/claude-sonnet-4
 
 # Or run directly
 python nlshell.py
+
+# Run with automation mode (skip all confirmations - DANGEROUS!)
+python nlshell.py --dangerously-skip-permissions
 ```
+
+### Command Line Options
+
+| Option | Description |
+|--------|-------------|
+| `-h`, `--help` | Show help message |
+| `--dangerously-skip-permissions` | Skip all confirmation prompts (for automation) |
 
 ### Example Session
 
@@ -134,8 +148,11 @@ python nlshell.py
 ║   Powered by LangChain DeepAgents          ║
 ║   Type 'exit' or 'quit' to leave           ║
 ║   Type '!' prefix for direct commands      ║
-║   Shell: bash | Memory: on                 ║
-║   Model: anthropic/claude-3.5-sonnet       ║
+║   Type '?' prefix for chat (no commands)   ║
+║   Type 'v' for voice input                 ║
+║   Shell: zsh  | Memory: on                 ║
+║   Model: anthropic/claude-sonnet-4         ║
+║   Voice: google/gemini-2.5-flash-lite      ║
 ║   History: 15 commands loaded              ║
 ╚════════════════════════════════════════════╝
 
@@ -219,6 +236,17 @@ Run as-is? [y/n/i(nterpret)]:
 | `history` | Show past natural language translations |
 | `clear` | Clear the screen |
 
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `↑` Up Arrow | Previous command from history |
+| `↓` Down Arrow | Next command in history |
+| `←` Left Arrow | Move cursor backward |
+| `→` Right Arrow | Move cursor forward |
+| `Tab` | Auto-complete |
+| `Ctrl+C` | Cancel current input |
+
 ### Confirmation Options
 
 When a command is suggested:
@@ -298,6 +326,35 @@ Run next command? [y/n/e(dit)]: y
 ```
 
 This creates a natural workflow where you can chain related commands together.
+
+### Automation Mode
+
+For scripting or automation, use the `--dangerously-skip-permissions` flag to skip all confirmation prompts:
+
+```bash
+python nlshell.py --dangerously-skip-permissions
+```
+
+**⚠️ WARNING:** This mode will:
+- Auto-execute ALL commands without confirmation
+- Auto-accept follow-up suggestions
+- Auto-accept error fix suggestions
+
+```
+⚠️  WARNING: Running with --dangerously-skip-permissions
+⚠️  All commands will be executed WITHOUT confirmation!
+
+nlsh:~$ list files
+
+Command: ls -la
+Explanation: List all files with details
+(auto-executing: --dangerously-skip-permissions)
+
+Executing...
+...
+```
+
+**Use with extreme caution.** Only use in controlled environments where you trust the input completely.
 
 ### Secure Password Handling
 
@@ -383,6 +440,9 @@ Normal commands capture stdout/stderr and return them to the LLM for analysis. I
 - `langchain` - LLM orchestration
 - `langchain-openai` - OpenAI-compatible LLM interface
 - `python-dotenv` - Environment variable management
+- `sounddevice` - Audio recording for voice input
+- `numpy` - Audio processing
+- `requests` - HTTP client for API calls
 
 ## License
 
