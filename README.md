@@ -414,6 +414,114 @@ Normal commands capture stdout/stderr and return them to the LLM for analysis. I
 - The LLM only receives "Execution SUCCESS (interactive mode)" or failure status
 - Your secrets never leave your terminal
 
+## Remote Execution (nlsh-remote)
+
+nlsh supports remote command execution via WebSocket. This allows you to run commands on a remote server as if you were using SSH, with HMAC-SHA256 authentication for security.
+
+### Architecture
+
+```
+┌─────────────────┐         WebSocket + HMAC         ┌─────────────────┐
+│    nlsh         │ ─────────────────────────────►   │  nlsh-remote    │
+│  (local client) │                                  │  (remote server)│
+│                 │ ◄─────────────────────────────   │                 │
+└─────────────────┘         Signed responses         └─────────────────┘
+```
+
+### Setting Up the Remote Server
+
+1. On your remote Linux server:
+
+```bash
+cd packages/nlsh_remote
+
+# Create .env file
+cp .env.example .env
+
+# Edit .env and set:
+# NLSH_SHARED_SECRET=your_secure_shared_secret
+# NLSH_REMOTE_HOST=0.0.0.0
+# NLSH_REMOTE_PORT=8765
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the server
+python server.py
+```
+
+2. Configure the client on your local machine:
+
+```bash
+# In packages/nlsh/.env or your main .env:
+NLSH_REMOTE_HOST=your-server-ip
+NLSH_REMOTE_PORT=8765
+NLSH_SHARED_SECRET=your_secure_shared_secret  # Must match server
+```
+
+### Remote Features
+
+The remote client (`RemoteClient` in `packages/nlsh/remote_client.py`) supports:
+
+| Feature | Description |
+|---------|-------------|
+| Command execution | Run shell commands on the remote server |
+| File upload | Transfer files from local to remote (like scp) |
+| File download | Transfer files from remote to local |
+| Binary data | Full binary support for file transfers |
+| Ping/pong | Connection health checks |
+
+### Python API Example
+
+```python
+from nlsh.remote_client import RemoteClient
+
+async with RemoteClient(
+    host="192.168.1.100",
+    port=8765,
+    shared_secret="your_secret"
+) as client:
+    # Execute a command
+    result = await client.execute_command("ls -la")
+    print(result.stdout)
+
+    # Upload a file
+    await client.upload_file("local.txt", "/tmp/remote.txt")
+
+    # Download a file
+    data, response = await client.download_file("/tmp/remote.txt")
+```
+
+### Security
+
+- **HMAC-SHA256 signing**: All messages are signed with a shared secret
+- **Timestamp validation**: Messages expire after 5 minutes to prevent replay attacks
+- **Nonce generation**: Each message has a unique nonce
+
+**Important:** The connection is NOT encrypted. For production use:
+- Use a VPN or SSH tunnel
+- Run behind a reverse proxy with TLS
+- Use firewall rules to restrict access
+
+## Project Structure
+
+This is a monorepo containing:
+
+```
+packages/
+├── nlsh/              # Natural language shell client
+│   ├── remote_client.py   # Remote execution client
+│   ├── requirements.txt
+│   └── .env.example
+├── nlsh_remote/       # Remote execution server
+│   ├── server.py          # FastAPI WebSocket server
+│   ├── requirements.txt
+│   └── .env.example
+└── shared/            # Shared code between packages
+    ├── crypto.py          # HMAC signing/verification
+    └── protocol.py        # Message types and serialization
+```
+
 ## Files
 
 | File | Location | Description |
@@ -423,6 +531,9 @@ Normal commands capture stdout/stderr and return them to the LLM for analysis. I
 | `.env` | Project directory | Configuration |
 | `.nlshell_history` | Home directory | Readline input history |
 | `.nlshell_command_log` | Home directory | Translation log (JSON lines) |
+| `packages/nlsh_remote/server.py` | Remote server | WebSocket server for remote execution |
+| `packages/shared/crypto.py` | Shared | HMAC message signing/verification |
+| `packages/shared/protocol.py` | Shared | Protocol message definitions |
 
 ## How It Works
 
