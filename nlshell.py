@@ -10,7 +10,6 @@ import json
 import subprocess
 import readline
 import base64
-import tempfile
 import io
 import wave
 import argparse
@@ -652,7 +651,7 @@ def record_audio() -> bytes | None:
     audio_data = []
     recording = True
 
-    def callback(indata, frames, time, status):
+    def callback(indata, _frames, _time, _status):
         if recording:
             audio_data.append(indata.copy())
 
@@ -815,6 +814,11 @@ class NLShell:
                 pass
         readline.set_history_length(1000)
         readline.parse_and_bind("tab: complete")
+        # Enable arrow keys for history navigation
+        readline.parse_and_bind(r'"\e[A": previous-history')  # Up arrow
+        readline.parse_and_bind(r'"\e[B": next-history')      # Down arrow
+        readline.parse_and_bind(r'"\e[C": forward-char')      # Right arrow
+        readline.parse_and_bind(r'"\e[D": backward-char')     # Left arrow
 
     def _save_history(self):
         """Save readline history."""
