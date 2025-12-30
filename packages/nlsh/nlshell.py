@@ -67,6 +67,9 @@ REMOTE_MODE = False  # --remote
 # Global remote client (initialized when --remote is used)
 _remote_client = None
 
+# Remote working directory (separate from local cwd)
+_remote_cwd = None
+
 # Global state for the shell
 class ShellState:
     def __init__(self):
@@ -398,31 +401,56 @@ def run_shell_command(
         The command output (stdout and stderr) and execution status
     """
     # Handle cd commands specially
+    global _remote_cwd
     parts = command.strip().split()
     if parts and parts[0] == "cd":
         should_execute, final_command = confirm_execution(command, explanation, warning)
         if not should_execute or final_command is None:
             return "Command cancelled by user."
 
-        try:
-            if len(parts) == 1:
-                new_path = Path.home()
-            elif parts[1] == "~":
-                new_path = Path.home()
-            elif parts[1].startswith("~"):
-                new_path = Path.home() / parts[1][2:]
-            else:
-                new_path = (shell_state.cwd / parts[1]).resolve()
+        if REMOTE_MODE:
+            # Handle cd on remote server
+            try:
+                # Get the target path
+                if len(parts) == 1:
+                    target = "~"
+                else:
+                    target = parts[1]
 
-            if new_path.is_dir():
-                shell_state.cwd = new_path
-                os.chdir(shell_state.cwd)
-                log_command(natural_request, final_command, True)
-                return f"Changed directory to: {shell_state.cwd}"
-            else:
-                return f"Directory not found: {new_path}"
-        except Exception as e:
-            return f"Error changing directory: {e}"
+                # Check if directory exists on remote and get its absolute path
+                success, stdout, stderr, returncode = execute_remote_command(
+                    f'cd {target} && pwd',
+                    cwd=_remote_cwd
+                )
+                if success:
+                    _remote_cwd = stdout.strip()
+                    log_command(natural_request, final_command, True)
+                    return f"Changed remote directory to: {_remote_cwd}"
+                else:
+                    return f"Remote directory not found: {target}"
+            except Exception as e:
+                return f"Error changing remote directory: {e}"
+        else:
+            # Handle cd locally
+            try:
+                if len(parts) == 1:
+                    new_path = Path.home()
+                elif parts[1] == "~":
+                    new_path = Path.home()
+                elif parts[1].startswith("~"):
+                    new_path = Path.home() / parts[1][2:]
+                else:
+                    new_path = (shell_state.cwd / parts[1]).resolve()
+
+                if new_path.is_dir():
+                    shell_state.cwd = new_path
+                    os.chdir(shell_state.cwd)
+                    log_command(natural_request, final_command, True)
+                    return f"Changed directory to: {shell_state.cwd}"
+                else:
+                    return f"Directory not found: {new_path}"
+            except Exception as e:
+                return f"Error changing directory: {e}"
 
     # Confirm before execution
     should_execute, final_command = confirm_execution(command, explanation, warning)
@@ -474,7 +502,7 @@ def run_shell_command(
             if REMOTE_MODE:
                 success, stdout, stderr, returncode = execute_remote_command(
                     current_cmd,
-                    cwd=str(shell_state.cwd) if shell_state.cwd else None
+                    cwd=_remote_cwd  # Use remote cwd, not local
                 )
             else:
                 proc_result = subprocess.run(
@@ -892,13 +920,14 @@ class NLShell:
 
     def print_prompt(self):
         """Print the shell prompt."""
-        display_path = str(shell_state.cwd)
-        home = str(Path.home())
-        if display_path.startswith(home):
-            display_path = "~" + display_path[len(home):]
         if REMOTE_MODE:
+            display_path = _remote_cwd if _remote_cwd else "~"
             print(f"\n\033[1;35mnlsh\033[0m[\033[1;33mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
         else:
+            display_path = str(shell_state.cwd)
+            home = str(Path.home())
+            if display_path.startswith(home):
+                display_path = "~" + display_path[len(home):]
             print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
 
     def chat(self, message: str):
@@ -998,7 +1027,7 @@ Respond conversationally. Be concise but helpful."""
                             # Remote execution
                             success, stdout, stderr, returncode = execute_remote_command(
                                 direct_cmd,
-                                cwd=str(shell_state.cwd) if shell_state.cwd else None
+                                cwd=_remote_cwd  # Use remote cwd, not local
                             )
                             if stdout:
                                 print(stdout, end="")
