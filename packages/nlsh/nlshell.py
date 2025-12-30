@@ -1192,6 +1192,11 @@ Respond conversationally. Be concise but helpful."""
                         print("\033[1;32m🤖 LLM ON - Natural language mode\033[0m")
                     continue
 
+                # In direct mode, execute commands directly without LLM
+                if DIRECT_MODE:
+                    self._execute_direct(user_input)
+                    continue
+
                 # Check if input looks like a shell command (using LLM)
                 if looks_like_shell_command(user_input):
                     print(f"\n\033[1;33mThis looks like a shell command.\033[0m")
@@ -1279,11 +1284,6 @@ Respond conversationally. Be concise but helpful."""
                         print("\033[2mCancelled.\033[0m")
                         continue
                     # else: fall through to interpret with agent
-
-                # In direct mode, execute commands directly without LLM
-                if DIRECT_MODE:
-                    self._execute_direct(user_input)
-                    continue
 
                 # Process through agent
                 print("\033[2m(thinking...)\033[0m")
