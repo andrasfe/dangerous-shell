@@ -63,6 +63,7 @@ AUDIO_MAX_DURATION = 30  # Max recording duration in seconds
 # Runtime flags (set via command line args)
 SKIP_PERMISSIONS = False  # --dangerously-skip-permissions
 REMOTE_MODE = False  # --remote
+DIRECT_MODE = False  # --direct (no LLM)
 
 # Global remote client (initialized when --remote is used)
 _remote_client = None
@@ -867,28 +868,34 @@ Respond with ONLY "command" or "natural" (no other text)."""
 
 class NLShell:
     def __init__(self):
-        if not OPENROUTER_API_KEY:
-            print("Error: OPENROUTER_API_KEY not set in .env file")
-            sys.exit(1)
+        self.llm = None
+        self.agent = None
 
-        # Create LLM using OpenRouter
-        self.llm = ChatOpenAI(
-            model=MODEL,
-            openai_api_key=OPENROUTER_API_KEY,
-            openai_api_base="https://openrouter.ai/api/v1",
-            temperature=0.1,
-        )
+        # Only initialize LLM if not in direct mode
+        if not DIRECT_MODE:
+            if not OPENROUTER_API_KEY:
+                print("Error: OPENROUTER_API_KEY not set in .env file")
+                print("Hint: Use --direct flag to run without LLM")
+                sys.exit(1)
 
-        # Set global LLM instance for standalone fix function
-        global _llm_instance
-        _llm_instance = self.llm
+            # Create LLM using OpenRouter
+            self.llm = ChatOpenAI(
+                model=MODEL,
+                openai_api_key=OPENROUTER_API_KEY,
+                openai_api_base="https://openrouter.ai/api/v1",
+                temperature=0.1,
+            )
 
-        # Create the deep agent with our tools
-        self.agent = create_deep_agent(
-            model=self.llm,
-            tools=[run_shell_command, read_file, list_directory],
-            system_prompt=get_system_prompt(),
-        )
+            # Set global LLM instance for standalone fix function
+            global _llm_instance
+            _llm_instance = self.llm
+
+            # Create the deep agent with our tools
+            self.agent = create_deep_agent(
+                model=self.llm,
+                tools=[run_shell_command, read_file, list_directory],
+                system_prompt=get_system_prompt(),
+            )
 
         self._setup_readline()
 
@@ -914,6 +921,81 @@ class NLShell:
         except Exception:
             pass
 
+    def _execute_direct(self, command: str):
+        """Execute a command directly without LLM."""
+        global _remote_cwd
+
+        # Handle cd specially
+        parts = command.strip().split()
+        if parts and parts[0] == "cd":
+            if REMOTE_MODE:
+                target = parts[1] if len(parts) > 1 else "~"
+                success, stdout, stderr, returncode = execute_remote_command(
+                    f'cd {target} && pwd',
+                    cwd=_remote_cwd
+                )
+                if success:
+                    _remote_cwd = stdout.strip()
+                    print(f"Changed remote directory to: {_remote_cwd}")
+                else:
+                    print(f"\033[1;31mDirectory not found: {target}\033[0m")
+            else:
+                try:
+                    if len(parts) == 1:
+                        new_path = Path.home()
+                    elif parts[1] == "~":
+                        new_path = Path.home()
+                    elif parts[1].startswith("~"):
+                        new_path = Path.home() / parts[1][2:]
+                    else:
+                        new_path = (shell_state.cwd / parts[1]).resolve()
+
+                    if new_path.is_dir():
+                        shell_state.cwd = new_path
+                        os.chdir(shell_state.cwd)
+                        print(f"Changed directory to: {shell_state.cwd}")
+                    else:
+                        print(f"\033[1;31mDirectory not found: {new_path}\033[0m")
+                except Exception as e:
+                    print(f"\033[1;31mError: {e}\033[0m")
+            return
+
+        # Execute command
+        if REMOTE_MODE:
+            success, stdout, stderr, returncode = execute_remote_command(
+                command,
+                cwd=_remote_cwd
+            )
+            if stdout:
+                print(stdout, end="")
+            if stderr:
+                print(f"\033[1;31m{stderr}\033[0m", end="")
+            if returncode != 0:
+                print(f"\033[1;31m✗ Exit code: {returncode}\033[0m")
+        else:
+            if requires_interactive_mode(command):
+                subprocess.run(
+                    command,
+                    shell=True,
+                    executable=SHELL_EXECUTABLE,
+                    cwd=shell_state.cwd
+                )
+            else:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    executable=SHELL_EXECUTABLE,
+                    cwd=shell_state.cwd,
+                    capture_output=True,
+                    text=True
+                )
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(f"\033[1;31m{result.stderr}\033[0m", end="")
+                if result.returncode != 0:
+                    print(f"\033[1;31m✗ Exit code: {result.returncode}\033[0m")
+
     def fix_failed_command(self, command: str, stderr: str, returncode: int) -> dict | None:
         """Use LLM to suggest a fix for a failed command."""
         return fix_failed_command_standalone(command, stderr, returncode)
@@ -922,13 +1004,19 @@ class NLShell:
         """Print the shell prompt."""
         if REMOTE_MODE:
             display_path = _remote_cwd if _remote_cwd else "~"
-            print(f"\n\033[1;35mnlsh\033[0m[\033[1;33mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+            if DIRECT_MODE:
+                print(f"\n\033[1;33m$\033[0m[\033[1;35mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+            else:
+                print(f"\n\033[1;35mnlsh\033[0m[\033[1;33mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
         else:
             display_path = str(shell_state.cwd)
             home = str(Path.home())
             if display_path.startswith(home):
                 display_path = "~" + display_path[len(home):]
-            print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+            if DIRECT_MODE:
+                print(f"\n\033[1;33m$\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+            else:
+                print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
 
     def chat(self, message: str):
         """Chat with the LLM without executing commands."""
@@ -985,20 +1073,25 @@ Respond conversationally. Be concise but helpful."""
         """Main shell loop."""
         history_count = len(load_recent_history())
         print("\033[1;36m╔════════════════════════════════════════════╗\033[0m")
-        print("\033[1;36m║   Natural Language Shell (nlsh)            ║\033[0m")
-        print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
+        if DIRECT_MODE:
+            print("\033[1;36m║   nlsh - Direct Mode (no LLM)              ║\033[0m")
+        else:
+            print("\033[1;36m║   Natural Language Shell (nlsh)            ║\033[0m")
+            print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
         print("\033[1;36m║   Type 'exit' or 'quit' to leave           ║\033[0m")
-        print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
-        print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
-        print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
+        if not DIRECT_MODE:
+            print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
+            print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
+            print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
             print(f"\033[1;36m║   Mode: REMOTE ({REMOTE_HOST}:{REMOTE_PORT}){' ' * max(0, 20 - len(REMOTE_HOST) - len(str(REMOTE_PORT)))}║\033[0m")
-        else:
+        elif not DIRECT_MODE:
             print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
-        print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
-        if AUDIO_AVAILABLE:
-            print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
+        if not DIRECT_MODE:
+            print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
+            if AUDIO_AVAILABLE:
+                print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
         print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
         print("\033[1;36m╚════════════════════════════════════════════╝\033[0m")
 
@@ -1184,6 +1277,11 @@ Respond conversationally. Be concise but helpful."""
                         continue
                     # else: fall through to interpret with agent
 
+                # In direct mode, execute commands directly without LLM
+                if DIRECT_MODE:
+                    self._execute_direct(user_input)
+                    continue
+
                 # Process through agent
                 print("\033[2m(thinking...)\033[0m")
                 self.process_input(user_input)
@@ -1193,7 +1291,7 @@ Respond conversationally. Be concise but helpful."""
 
 
 def main():
-    global SKIP_PERMISSIONS, REMOTE_MODE, _remote_client
+    global SKIP_PERMISSIONS, REMOTE_MODE, DIRECT_MODE, _remote_client
 
     parser = argparse.ArgumentParser(
         description="Natural Language Shell - An intelligent shell powered by LangChain DeepAgents"
@@ -1208,12 +1306,22 @@ def main():
         action="store_true",
         help="Execute commands on remote server (requires NLSH_REMOTE_HOST, NLSH_REMOTE_PORT, NLSH_SHARED_SECRET in .env)"
     )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Direct mode: Execute commands without LLM (like a regular shell)"
+    )
     args = parser.parse_args()
 
     if args.dangerously_skip_permissions:
         SKIP_PERMISSIONS = True
         print("\033[1;31m⚠️  WARNING: Running with --dangerously-skip-permissions\033[0m")
         print("\033[1;31m⚠️  All commands will be executed WITHOUT confirmation!\033[0m")
+        print()
+
+    if args.direct:
+        DIRECT_MODE = True
+        print("\033[1;33m📟 Direct mode: LLM disabled, commands execute directly\033[0m")
         print()
 
     if args.remote:
