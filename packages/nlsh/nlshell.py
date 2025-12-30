@@ -63,7 +63,7 @@ AUDIO_MAX_DURATION = 30  # Max recording duration in seconds
 # Runtime flags (set via command line args)
 SKIP_PERMISSIONS = False  # --dangerously-skip-permissions
 REMOTE_MODE = False  # --remote
-DIRECT_MODE = False  # --direct (no LLM)
+DIRECT_MODE = False  # --direct (no LLM, can be toggled at runtime)
 
 # Global remote client (initialized when --remote is used)
 _remote_client = None
@@ -871,31 +871,28 @@ class NLShell:
         self.llm = None
         self.agent = None
 
-        # Only initialize LLM if not in direct mode
-        if not DIRECT_MODE:
-            if not OPENROUTER_API_KEY:
-                print("Error: OPENROUTER_API_KEY not set in .env file")
-                print("Hint: Use --direct flag to run without LLM")
-                sys.exit(1)
+        if not OPENROUTER_API_KEY:
+            print("Error: OPENROUTER_API_KEY not set in .env file")
+            sys.exit(1)
 
-            # Create LLM using OpenRouter
-            self.llm = ChatOpenAI(
-                model=MODEL,
-                openai_api_key=OPENROUTER_API_KEY,
-                openai_api_base="https://openrouter.ai/api/v1",
-                temperature=0.1,
-            )
+        # Create LLM using OpenRouter
+        self.llm = ChatOpenAI(
+            model=MODEL,
+            openai_api_key=OPENROUTER_API_KEY,
+            openai_api_base="https://openrouter.ai/api/v1",
+            temperature=0.1,
+        )
 
-            # Set global LLM instance for standalone fix function
-            global _llm_instance
-            _llm_instance = self.llm
+        # Set global LLM instance for standalone fix function
+        global _llm_instance
+        _llm_instance = self.llm
 
-            # Create the deep agent with our tools
-            self.agent = create_deep_agent(
-                model=self.llm,
-                tools=[run_shell_command, read_file, list_directory],
-                system_prompt=get_system_prompt(),
-            )
+        # Create the deep agent with our tools
+        self.agent = create_deep_agent(
+            model=self.llm,
+            tools=[run_shell_command, read_file, list_directory],
+            system_prompt=get_system_prompt(),
+        )
 
         self._setup_readline()
 
@@ -1073,25 +1070,21 @@ Respond conversationally. Be concise but helpful."""
         """Main shell loop."""
         history_count = len(load_recent_history())
         print("\033[1;36m╔════════════════════════════════════════════╗\033[0m")
-        if DIRECT_MODE:
-            print("\033[1;36m║   nlsh - Direct Mode (no LLM)              ║\033[0m")
-        else:
-            print("\033[1;36m║   Natural Language Shell (nlsh)            ║\033[0m")
-            print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
+        print("\033[1;36m║   Natural Language Shell (nlsh)            ║\033[0m")
+        print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
         print("\033[1;36m║   Type 'exit' or 'quit' to leave           ║\033[0m")
-        if not DIRECT_MODE:
-            print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
-            print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
-            print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
+        print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
+        print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
+        print("\033[1;36m║   Type '//' to toggle LLM on/off           ║\033[0m")
+        print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
             print(f"\033[1;36m║   Mode: REMOTE ({REMOTE_HOST}:{REMOTE_PORT}){' ' * max(0, 20 - len(REMOTE_HOST) - len(str(REMOTE_PORT)))}║\033[0m")
-        elif not DIRECT_MODE:
+        else:
             print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
-        if not DIRECT_MODE:
-            print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
-            if AUDIO_AVAILABLE:
-                print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
+        print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
+        if AUDIO_AVAILABLE:
+            print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
         print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
         print("\033[1;36m╚════════════════════════════════════════════╝\033[0m")
 
@@ -1187,6 +1180,16 @@ Respond conversationally. Be concise but helpful."""
 
                 if user_input.lower() == "clear":
                     os.system("clear")
+                    continue
+
+                # Toggle LLM mode with /llm or //
+                if user_input in ("/llm", "//"):
+                    global DIRECT_MODE
+                    DIRECT_MODE = not DIRECT_MODE
+                    if DIRECT_MODE:
+                        print("\033[1;33m📟 LLM OFF - Direct mode\033[0m")
+                    else:
+                        print("\033[1;32m🤖 LLM ON - Natural language mode\033[0m")
                     continue
 
                 # Check if input looks like a shell command (using LLM)
@@ -1291,7 +1294,7 @@ Respond conversationally. Be concise but helpful."""
 
 
 def main():
-    global SKIP_PERMISSIONS, REMOTE_MODE, DIRECT_MODE, _remote_client
+    global SKIP_PERMISSIONS, REMOTE_MODE, _remote_client
 
     parser = argparse.ArgumentParser(
         description="Natural Language Shell - An intelligent shell powered by LangChain DeepAgents"
@@ -1306,22 +1309,12 @@ def main():
         action="store_true",
         help="Execute commands on remote server (requires NLSH_REMOTE_HOST, NLSH_REMOTE_PORT, NLSH_SHARED_SECRET in .env)"
     )
-    parser.add_argument(
-        "--direct",
-        action="store_true",
-        help="Direct mode: Execute commands without LLM (like a regular shell)"
-    )
     args = parser.parse_args()
 
     if args.dangerously_skip_permissions:
         SKIP_PERMISSIONS = True
         print("\033[1;31m⚠️  WARNING: Running with --dangerously-skip-permissions\033[0m")
         print("\033[1;31m⚠️  All commands will be executed WITHOUT confirmation!\033[0m")
-        print()
-
-    if args.direct:
-        DIRECT_MODE = True
-        print("\033[1;33m📟 Direct mode: LLM disabled, commands execute directly\033[0m")
         print()
 
     if args.remote:
