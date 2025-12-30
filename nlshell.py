@@ -13,6 +13,7 @@ import base64
 import tempfile
 import io
 import wave
+import argparse
 from pathlib import Path
 from datetime import datetime
 from typing import Annotated
@@ -46,6 +47,9 @@ HISTORY_CONTEXT_SIZE = 20
 AUDIO_SAMPLE_RATE = 16000  # 16kHz for speech recognition
 AUDIO_CHANNELS = 1  # Mono
 AUDIO_MAX_DURATION = 30  # Max recording duration in seconds
+
+# Runtime flags (set via command line args)
+SKIP_PERMISSIONS = False  # --dangerously-skip-permissions
 
 # Global state for the shell
 class ShellState:
@@ -177,6 +181,11 @@ def confirm_execution(command: str, explanation: str, warning: str | None = None
 
     if warning:
         print(f"\033[1;31mWarning:\033[0m {warning}")
+
+    # Skip confirmation if --dangerously-skip-permissions flag is set
+    if SKIP_PERMISSIONS:
+        print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+        return True, command
 
     while True:
         response = input("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
@@ -448,6 +457,11 @@ def run_shell_command(
                     print(f"\n\033[1;36mSuggested next:\033[0m {suggestion['command']}")
                     print(f"\033[1;33mReason:\033[0m {suggestion['explanation']}")
 
+                    if SKIP_PERMISSIONS:
+                        print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+                        current_cmd = suggestion['command']
+                        continue  # Run the suggested command
+
                     next_response = input("\n\033[1;32mRun next command? [y/n/e(dit)]:\033[0m ").strip().lower()
                     if next_response in ("y", "yes"):
                         current_cmd = suggestion['command']
@@ -465,7 +479,10 @@ def run_shell_command(
             log_command(natural_request, current_cmd, False)
 
             # Offer to fix the command
-            fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+            if SKIP_PERMISSIONS:
+                fix_response = "y"
+            else:
+                fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
                 return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
 
@@ -481,6 +498,11 @@ def run_shell_command(
 
             print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
             print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
+
+            if SKIP_PERMISSIONS:
+                print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+                current_cmd = fixed_cmd
+                continue  # Re-run with fixed command
 
             run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
             if run_fix in ("y", "yes"):
@@ -1013,7 +1035,10 @@ Respond conversationally. Be concise but helpful."""
                                 log_command(user_input, current_cmd, False)
 
                                 # Offer to fix the command
-                                fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+                                if SKIP_PERMISSIONS:
+                                    fix_response = "y"
+                                else:
+                                    fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
                                 if fix_response not in ("y", "yes"):
                                     break
 
@@ -1029,6 +1054,11 @@ Respond conversationally. Be concise but helpful."""
 
                                 print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
                                 print(f"\033[1;33mExplanation:\033[0m {explanation}")
+
+                                if SKIP_PERMISSIONS:
+                                    print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+                                    current_cmd = fixed_cmd
+                                    continue  # Re-run with fixed command
 
                                 run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
                                 if run_fix in ("y", "yes"):
@@ -1055,6 +1085,24 @@ Respond conversationally. Be concise but helpful."""
 
 
 def main():
+    global SKIP_PERMISSIONS
+
+    parser = argparse.ArgumentParser(
+        description="Natural Language Shell - An intelligent shell powered by LangChain DeepAgents"
+    )
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        help="DANGEROUS: Skip all confirmation prompts and auto-execute commands"
+    )
+    args = parser.parse_args()
+
+    if args.dangerously_skip_permissions:
+        SKIP_PERMISSIONS = True
+        print("\033[1;31m⚠️  WARNING: Running with --dangerously-skip-permissions\033[0m")
+        print("\033[1;31m⚠️  All commands will be executed WITHOUT confirmation!\033[0m")
+        print()
+
     shell = NLShell()
     shell.run()
 
