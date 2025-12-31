@@ -1126,6 +1126,7 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Type '//' to toggle LLM on/off           ║\033[0m")
         print("\033[1;36m║   Type '/ch' to clear history              ║\033[0m")
+        print("\033[1;36m║   Type '/d' to toggle danger mode          ║\033[0m")
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
@@ -1250,6 +1251,16 @@ Respond conversationally. Be concise but helpful."""
                         history_file.unlink()
                     mode = "remote" if REMOTE_MODE else "local"
                     print(f"\033[1;33m🗑️  Cleared {mode} command history\033[0m")
+                    continue
+
+                # Toggle skip-permissions mode
+                if user_input in ("/danger", "/d"):
+                    global SKIP_PERMISSIONS
+                    SKIP_PERMISSIONS = not SKIP_PERMISSIONS
+                    if SKIP_PERMISSIONS:
+                        print("\033[1;31m⚠️  DANGER MODE ON - Commands execute without confirmation!\033[0m")
+                    else:
+                        print("\033[1;32m✓ Safe mode - Commands require confirmation\033[0m")
                     continue
 
                 # In direct mode, execute commands directly without LLM
