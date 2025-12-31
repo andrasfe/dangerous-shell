@@ -81,7 +81,7 @@ Execute? [y/n/e(dit)/f(eedback)]: y
 Executing...
 ./src/main.py
 ./tests/test_utils.py
-✓ Exit code: 0
+✓ Command completed successfully
 ```
 
 ### Using Feedback
@@ -116,7 +116,7 @@ Execute? [y/n/e(dit)/f(eedback)]: y
 
 Executing on remote...
 /home/andras/Documents
-✓ Exit code: 0
+✓ Command completed successfully
 
 nlsh[remote]:~/Documents$ list files here
 (thinking...)
@@ -151,7 +151,7 @@ nlsh:~$ list files
 
 Command: ls
 Explanation: List files in current directory
-(auto-executing: danger mode)
+(auto-executing: --dangerously-skip-permissions)
 
 file1.txt  file2.txt
 

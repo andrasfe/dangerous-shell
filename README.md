@@ -49,12 +49,12 @@ nlsh[remote]:~$ now change directory to that expenses folder we did previously
 Command: cd "/media/blabla/some expenses folder/" && pwd
 Explanation: Change to the expenses folder and confirm the current directory
 
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 Command: ls -lah "/media/blabla/some expenses folder/"
 Explanation: Verify the expenses folder exists and show its contents
 
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 ```
 
 ## Architecture
@@ -89,7 +89,7 @@ Execute? [y/n/e(dit)]: y
                                    ▼
                     ┌─────────────────────────┐
                     │   User Confirmation     │
-                    │   Execute? [y/n/e(dit)] │
+                    │ Execute? [y/n/e/f]      │
                     └───────────┬─────────────┘
                                 │
                                 ▼
@@ -177,7 +177,7 @@ nlsh:~$ find all python files larger than 1MB
 
 Command: find . -name "*.py" -size +1M
 Explanation: Searches for Python files exceeding 1MB in size
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 Executing...
 ./data/large_dataset.py
@@ -187,7 +187,7 @@ nlsh:~$ do the same but for javascript files
 
 Command: find . -name "*.js" -size +1M
 Explanation: Same search as before but for JavaScript files
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 Executing...
 ./dist/bundle.js
@@ -205,7 +205,7 @@ nlsh:~$ install the repo https://github.com/user/cool-project
 
 Command: git clone https://github.com/user/cool-project
 Explanation: Clone the repository to the current directory
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 Executing...
 Cloning into 'cool-project'...
@@ -215,7 +215,7 @@ Cloning into 'cool-project'...
 
 Command: cd cool-project && pip install -r requirements.txt
 Explanation: Install Python dependencies listed in requirements.txt
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 Executing...
 Successfully installed package1 package2...
@@ -223,7 +223,7 @@ Successfully installed package1 package2...
 
 Command: pip install -e .
 Explanation: Install the package in editable mode as specified in README
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 ...
 ```
 
@@ -270,6 +270,7 @@ When a command is suggested:
 - `y` / `yes` - Execute the command
 - `n` / `no` - Cancel
 - `e` / `edit` - Modify the command before executing
+- `f` / `feedback` - Provide feedback to LLM to regenerate command
 
 ### Voice Input
 
@@ -284,7 +285,7 @@ You said: list all python files in this directory
 
 Command: find . -name "*.py" -type f
 Explanation: Find all Python files in the current directory tree
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 ```
 
 Voice input uses Gemini for speech-to-text transcription via OpenRouter. The transcribed text is then processed as normal natural language input.
@@ -310,7 +311,7 @@ Would you like me to try to fix this? [y/n]: y
 Suggested fix: gcc myprogram.c -o myprogram
 Explanation: The file was named 'myprogram.c' not 'myprog.c', and added -o flag for output
 
-Run fixed command? [y/n/e(dit)]: y
+Run fixed command? [y/n/e(dit)/f(eedback)]: y
 ```
 
 The fix loop continues until the command succeeds or you decline further fixes.
@@ -331,7 +332,7 @@ Changes not staged for commit:
 Suggested next: git add nlshell.py
 Reason: Stage the modified file for commit
 
-Run next command? [y/n/e(dit)]: y
+Run next command? [y/n/e(dit)/f(eedback)]: y
 
 Executing...
 ✓ Command completed successfully
@@ -339,7 +340,7 @@ Executing...
 Suggested next: git commit -m "Update nlshell.py"
 Reason: Commit the staged changes
 
-Run next command? [y/n/e(dit)]: y
+Run next command? [y/n/e(dit)/f(eedback)]: y
 ```
 
 This creates a natural workflow where you can chain related commands together.
@@ -391,7 +392,7 @@ nlsh:~$ install this package system-wide
 
 Command: sudo pip install package
 Explanation: Install package globally (requires admin privileges)
-Execute? [y/n/e(dit)]: y
+Execute? [y/n/e(dit)/f(eedback)]: y
 
 🔒 Interactive mode: Password input goes directly to the command (not captured)
 Executing interactively...
@@ -433,16 +434,16 @@ Normal commands capture stdout/stderr and return them to the LLM for analysis. I
 
 ## Remote Execution (nlsh-remote)
 
-nlsh supports remote command execution via WebSocket. This allows you to run commands on a remote server as if you were using SSH, with HMAC-SHA256 authentication for security.
+nlsh supports remote command execution via SSH tunnel. This allows you to run commands on a remote server securely.
 
 ### Architecture
 
 ```
-┌─────────────────┐         WebSocket + HMAC         ┌─────────────────┐
+┌─────────────────┐       SSH Tunnel + WebSocket     ┌─────────────────┐
 │    nlsh         │ ─────────────────────────────►   │  nlsh-remote    │
 │  (local client) │                                  │  (remote server)│
-│                 │ ◄─────────────────────────────   │                 │
-└─────────────────┘         Signed responses         └─────────────────┘
+│                 │ ◄─────────────────────────────   │  (localhost)    │
+└─────────────────┘                                  └─────────────────┘
 ```
 
 ### Setting Up the Remote Server
@@ -457,23 +458,30 @@ cp .env.example .env
 
 # Edit .env and set:
 # NLSH_SHARED_SECRET=your_secure_shared_secret
-# NLSH_REMOTE_HOST=0.0.0.0
-# NLSH_REMOTE_PORT=8765
+# Server binds to localhost by default (127.0.0.1)
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Run the server
-python server.py
+./restart.sh   # Background
+# Or: python server.py  # Foreground
 ```
 
-2. Configure the client on your local machine:
+2. Configure the client on your local machine (`packages/nlsh/.env`):
 
 ```bash
-# In packages/nlsh/.env or your main .env:
+NLSH_REMOTE_USER=your_ssh_username
 NLSH_REMOTE_HOST=your-server-ip
 NLSH_REMOTE_PORT=8765
 NLSH_SHARED_SECRET=your_secure_shared_secret  # Must match server
+```
+
+3. Create SSH tunnel and connect:
+
+```bash
+./tunnel.sh              # Terminal 1: SSH tunnel
+python nlshell.py --remote  # Terminal 2: nlsh
 ```
 
 ### Remote Features
@@ -493,8 +501,9 @@ The remote client (`RemoteClient` in `packages/nlsh/remote_client.py`) supports:
 ```python
 from nlsh.remote_client import RemoteClient
 
+# Note: Requires SSH tunnel to be running (./tunnel.sh)
 async with RemoteClient(
-    host="192.168.1.100",
+    host="127.0.0.1",  # localhost via SSH tunnel
     port=8765,
     shared_secret="your_secret"
 ) as client:
@@ -511,14 +520,10 @@ async with RemoteClient(
 
 ### Security
 
-- **HMAC-SHA256 signing**: All messages are signed with a shared secret
+- **SSH tunnel**: All traffic is encrypted via SSH
+- **Localhost binding**: Server only accepts connections from localhost
+- **HMAC-SHA256 signing**: Messages are signed as additional integrity check
 - **Timestamp validation**: Messages expire after 5 minutes to prevent replay attacks
-- **Nonce generation**: Each message has a unique nonce
-
-**Important:** The connection is NOT encrypted. For production use:
-- Use a VPN or SSH tunnel
-- Run behind a reverse proxy with TLS
-- Use firewall rules to restrict access
 
 ## Project Structure
 

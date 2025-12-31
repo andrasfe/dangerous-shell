@@ -39,14 +39,14 @@ python server.py
 
 ## Client Setup
 
-On your client machine, configure `.env`:
+On your client machine, configure `packages/nlsh/.env`:
 ```bash
 NLSH_REMOTE_USER=your_username
 NLSH_REMOTE_HOST=192.168.1.100
-NLSH_SHARED_SECRET=your_secret
+NLSH_SHARED_SECRET=your_secret  # Must match server
 ```
 
-Then:
+Then from the nlsh directory:
 ```bash
 ./tunnel.sh              # Terminal 1: SSH tunnel
 python nlshell.py --remote  # Terminal 2: nlsh
