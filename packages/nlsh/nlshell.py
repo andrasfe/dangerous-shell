@@ -1125,6 +1125,7 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Type '//' to toggle LLM on/off           ║\033[0m")
+        print("\033[1;36m║   Type '/ch' to clear history              ║\033[0m")
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
@@ -1239,6 +1240,16 @@ Respond conversationally. Be concise but helpful."""
                         print("\033[1;33m📟 LLM OFF - Direct mode\033[0m")
                     else:
                         print("\033[1;32m🤖 LLM ON - Natural language mode\033[0m")
+                    continue
+
+                # Clear command history
+                if user_input in ("/clearhistory", "/ch"):
+                    readline.clear_history()
+                    history_file = self._get_history_file()
+                    if history_file.exists():
+                        history_file.unlink()
+                    mode = "remote" if REMOTE_MODE else "local"
+                    print(f"\033[1;33m🗑️  Cleared {mode} command history\033[0m")
                     continue
 
                 # In direct mode, execute commands directly without LLM
