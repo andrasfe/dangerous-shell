@@ -54,7 +54,7 @@ python nlshell.py --remote  # Terminal 2: nlsh
 
 ## Protocol
 
-WebSocket with HMAC-SHA256 signed JSON messages:
+Communication uses WebSocket over SSH tunnel. Messages are JSON with HMAC-SHA256 signatures as an additional integrity check:
 - `COMMAND` - Execute shell command
 - `UPLOAD` - Upload file
 - `DOWNLOAD` - Download file
