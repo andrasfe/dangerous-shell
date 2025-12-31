@@ -226,7 +226,7 @@ def confirm_execution(command: str, explanation: str, warning: str | None = None
         return True, command
 
     while True:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
         if response in ("y", "yes"):
             return True, command
         elif response in ("n", "no"):
@@ -237,8 +237,14 @@ def confirm_execution(command: str, explanation: str, warning: str | None = None
                 return True, edited
             print("Empty command, cancelling.")
             return False, None
+        elif response in ("f", "feedback"):
+            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            if feedback:
+                return "feedback", feedback
+            print("Empty feedback, cancelling.")
+            return False, None
         else:
-            print("Please enter 'y', 'n', or 'e'")
+            print("Please enter 'y', 'n', 'e', or 'f'")
 
 
 def read_file(
@@ -424,6 +430,8 @@ def run_shell_command(
     parts = command.strip().split()
     if parts and parts[0] == "cd":
         should_execute, final_command = confirm_execution(command, explanation, warning)
+        if should_execute == "feedback":
+            return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
         if not should_execute or final_command is None:
             return "Command cancelled by user."
 
@@ -473,6 +481,10 @@ def run_shell_command(
 
     # Confirm before execution
     should_execute, final_command = confirm_execution(command, explanation, warning)
+
+    if should_execute == "feedback":
+        # User provided feedback - return it so LLM can regenerate
+        return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
 
     if not should_execute or final_command is None:
         return "Command cancelled by user."
