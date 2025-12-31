@@ -1015,7 +1015,7 @@ class NLShell:
         """Get the shell prompt string with readline-safe ANSI codes."""
         # Wrap ANSI codes in \001 and \002 so readline can track cursor position
         def rl_color(code: str) -> str:
-            return f"\001{code}\002"
+            return f"\x01{code}\x02"
 
         BOLD_YELLOW = rl_color("\033[1;33m")
         BOLD_MAGENTA = rl_color("\033[1;35m")
@@ -1025,18 +1025,18 @@ class NLShell:
         if REMOTE_MODE:
             display_path = _remote_cwd if _remote_cwd else "~"
             if DIRECT_MODE:
-                return f"\n{BOLD_YELLOW}${RESET}[{BOLD_MAGENTA}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
+                return f"{BOLD_YELLOW}${RESET}[{BOLD_MAGENTA}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
             else:
-                return f"\n{BOLD_MAGENTA}nlsh{RESET}[{BOLD_YELLOW}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
+                return f"{BOLD_MAGENTA}nlsh{RESET}[{BOLD_YELLOW}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
         else:
             display_path = str(shell_state.cwd)
             home = str(Path.home())
             if display_path.startswith(home):
                 display_path = "~" + display_path[len(home):]
             if DIRECT_MODE:
-                return f"\n{BOLD_YELLOW}${RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
+                return f"{BOLD_YELLOW}${RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
             else:
-                return f"\n{BOLD_MAGENTA}nlsh{RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
+                return f"{BOLD_MAGENTA}nlsh{RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
 
     def chat(self, message: str):
         """Chat with the LLM without executing commands."""
@@ -1113,6 +1113,7 @@ Respond conversationally. Be concise but helpful."""
 
         try:
             while True:
+                print()  # Newline before prompt (outside readline)
                 try:
                     user_input = input(self.get_prompt()).strip()
                 except EOFError:
