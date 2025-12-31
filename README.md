@@ -40,6 +40,23 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Configurable model** - Use any LLM available on OpenRouter
 - **Automation mode** - `--dangerously-skip-permissions` flag for scripting
 
+### More than just `history`. Example:
+
+```sh
+nlsh[remote]:~$ now change directory to that expenses folder we did previously
+(thinking...)
+
+Command: cd "/media/blabla/some expenses folder/" && pwd
+Explanation: Change to the expenses folder and confirm the current directory
+
+Execute? [y/n/e(dit)]: y
+
+Command: ls -lah "/media/blabla/some expenses folder/"
+Explanation: Verify the expenses folder exists and show its contents
+
+Execute? [y/n/e(dit)]: y
+```
+
 ## Architecture
 
 ```
