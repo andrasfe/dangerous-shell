@@ -51,7 +51,8 @@ SHELL_EXECUTABLE = os.getenv("NLSH_SHELL", os.getenv("SHELL", "/bin/bash"))
 LOCAL_MODEL = os.getenv("NLSH_LOCAL_MODEL", "false").lower() in ("true", "1", "yes")
 LOCAL_MODEL_URL = os.getenv("NLSH_LOCAL_URL", "http://localhost:1234/v1")
 LOCAL_MODEL_NAME = os.getenv("NLSH_LOCAL_MODEL_NAME", "local-model")
-HISTORY_FILE = Path.home() / ".nlshell_history"
+HISTORY_FILE_LOCAL = Path.home() / ".nlshell_history"
+HISTORY_FILE_REMOTE = Path.home() / ".nlshell_history_remote"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
 
@@ -915,11 +916,16 @@ class NLShell:
 
         self._setup_readline()
 
+    def _get_history_file(self) -> Path:
+        """Get the appropriate history file based on mode."""
+        return HISTORY_FILE_REMOTE if REMOTE_MODE else HISTORY_FILE_LOCAL
+
     def _setup_readline(self):
         """Setup readline for input history."""
-        if HISTORY_FILE.exists():
+        history_file = self._get_history_file()
+        if history_file.exists():
             try:
-                readline.read_history_file(HISTORY_FILE)
+                readline.read_history_file(history_file)
             except Exception:
                 pass
         readline.set_history_length(1000)
@@ -928,7 +934,7 @@ class NLShell:
     def _save_history(self):
         """Save readline history."""
         try:
-            readline.write_history_file(HISTORY_FILE)
+            readline.write_history_file(self._get_history_file())
         except Exception:
             pass
 
