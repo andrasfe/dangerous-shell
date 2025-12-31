@@ -1011,23 +1011,32 @@ class NLShell:
         """Use LLM to suggest a fix for a failed command."""
         return fix_failed_command_standalone(command, stderr, returncode)
 
-    def print_prompt(self):
-        """Print the shell prompt."""
+    def get_prompt(self) -> str:
+        """Get the shell prompt string with readline-safe ANSI codes."""
+        # Wrap ANSI codes in \001 and \002 so readline can track cursor position
+        def rl_color(code: str) -> str:
+            return f"\001{code}\002"
+
+        BOLD_YELLOW = rl_color("\033[1;33m")
+        BOLD_MAGENTA = rl_color("\033[1;35m")
+        BOLD_BLUE = rl_color("\033[1;34m")
+        RESET = rl_color("\033[0m")
+
         if REMOTE_MODE:
             display_path = _remote_cwd if _remote_cwd else "~"
             if DIRECT_MODE:
-                print(f"\n\033[1;33m$\033[0m[\033[1;35mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+                return f"\n{BOLD_YELLOW}${RESET}[{BOLD_MAGENTA}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
             else:
-                print(f"\n\033[1;35mnlsh\033[0m[\033[1;33mremote\033[0m]:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+                return f"\n{BOLD_MAGENTA}nlsh{RESET}[{BOLD_YELLOW}remote{RESET}]:{BOLD_BLUE}{display_path}{RESET}$ "
         else:
             display_path = str(shell_state.cwd)
             home = str(Path.home())
             if display_path.startswith(home):
                 display_path = "~" + display_path[len(home):]
             if DIRECT_MODE:
-                print(f"\n\033[1;33m$\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+                return f"\n{BOLD_YELLOW}${RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
             else:
-                print(f"\n\033[1;35mnlsh\033[0m:\033[1;34m{display_path}\033[0m$ ", end="", flush=True)
+                return f"\n{BOLD_MAGENTA}nlsh{RESET}:{BOLD_BLUE}{display_path}{RESET}$ "
 
     def chat(self, message: str):
         """Chat with the LLM without executing commands."""
@@ -1104,9 +1113,8 @@ Respond conversationally. Be concise but helpful."""
 
         try:
             while True:
-                self.print_prompt()
                 try:
-                    user_input = input().strip()
+                    user_input = input(self.get_prompt()).strip()
                 except EOFError:
                     print("\nGoodbye!")
                     break
