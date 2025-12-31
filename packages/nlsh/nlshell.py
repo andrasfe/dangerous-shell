@@ -513,7 +513,7 @@ def run_shell_command(
     current_cmd = final_command
     while True:
         if REMOTE_MODE:
-            print(f"\n\033[2mExecuting on remote ({REMOTE_HOST})...\033[0m")
+            print(f"\n\033[2mExecuting on remote...\033[0m")
         else:
             print(f"\n\033[2mExecuting...\033[0m")
         try:
@@ -1116,7 +1116,7 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
-            print(f"\033[1;36m║   Mode: REMOTE ({REMOTE_HOST}:{REMOTE_PORT}){' ' * max(0, 20 - len(REMOTE_HOST) - len(str(REMOTE_PORT)))}║\033[0m")
+            print(f"\033[1;36m║   Mode: REMOTE (SSH tunnel)                ║\033[0m")
         else:
             print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
@@ -1344,7 +1344,7 @@ def main():
     parser.add_argument(
         "--remote",
         action="store_true",
-        help="Execute commands on remote server (requires NLSH_REMOTE_HOST, NLSH_REMOTE_PORT, NLSH_SHARED_SECRET in .env)"
+        help="Execute commands on remote server via SSH tunnel (run ./tunnel.sh first)"
     )
     args = parser.parse_args()
 
@@ -1358,16 +1358,13 @@ def main():
         if not REMOTE_AVAILABLE:
             print("\033[1;31mError: Remote execution not available. Check remote_client.py import.\033[0m")
             sys.exit(1)
-        if not REMOTE_HOST:
-            print("\033[1;31mError: NLSH_REMOTE_HOST not set in .env\033[0m")
-            sys.exit(1)
         if not REMOTE_SECRET:
             print("\033[1;31mError: NLSH_SHARED_SECRET not set in .env\033[0m")
             sys.exit(1)
 
         REMOTE_MODE = True
         _remote_client = True  # Flag that remote is configured
-        print(f"\033[1;35m🌐 Remote mode: Commands will execute on {REMOTE_HOST}:{REMOTE_PORT}\033[0m")
+        print(f"\033[1;35m🌐 Remote mode: via SSH tunnel (localhost:{REMOTE_PORT})\033[0m")
         print()
 
     shell = NLShell()
