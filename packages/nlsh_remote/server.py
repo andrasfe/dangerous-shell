@@ -4,6 +4,8 @@ nlsh-remote - Remote execution server for Natural Language Shell.
 
 Accepts WebSocket connections from nlsh clients, verifies HMAC signatures,
 and executes commands on the local system.
+
+Security: Use SSH tunnel for secure access (recommended over SSL).
 """
 
 import os
@@ -34,13 +36,9 @@ load_dotenv()
 
 # Configuration
 SHARED_SECRET = os.getenv("NLSH_SHARED_SECRET", "")
-HOST = os.getenv("NLSH_REMOTE_HOST", "0.0.0.0")
+HOST = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")  # localhost by default (use SSH tunnel)
 PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
 SHELL_EXECUTABLE = os.getenv("NLSH_SHELL", os.getenv("SHELL", "/bin/bash"))
-
-# SSL Configuration (optional)
-SSL_CERT = os.getenv("NLSH_SSL_CERT", "")  # Path to certificate file
-SSL_KEY = os.getenv("NLSH_SSL_KEY", "")    # Path to private key file
 
 # Create FastAPI app
 app = FastAPI(
@@ -236,36 +234,16 @@ def main():
         print("Please set it in your .env file")
         sys.exit(1)
 
-    # Check SSL configuration
-    use_ssl = bool(SSL_CERT and SSL_KEY)
-    if use_ssl:
-        if not os.path.exists(SSL_CERT):
-            print(f"ERROR: SSL certificate not found: {SSL_CERT}")
-            sys.exit(1)
-        if not os.path.exists(SSL_KEY):
-            print(f"ERROR: SSL key not found: {SSL_KEY}")
-            sys.exit(1)
-
-    protocol = "wss" if use_ssl else "ws"
     print(f"Starting nlsh-remote server...")
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
     print(f"  Shell: {SHELL_EXECUTABLE}")
-    print(f"  SSL: {'enabled' if use_ssl else 'disabled'}")
-    print(f"  WebSocket: {protocol}://{HOST}:{PORT}/ws")
+    print(f"  WebSocket: ws://{HOST}:{PORT}/ws")
+    if HOST == "127.0.0.1":
+        print(f"  Security: localhost only (use SSH tunnel)")
     print()
 
-    if use_ssl:
-        uvicorn.run(
-            app,
-            host=HOST,
-            port=PORT,
-            log_level="warning",
-            ssl_certfile=SSL_CERT,
-            ssl_keyfile=SSL_KEY
-        )
-    else:
-        uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
 
 
 if __name__ == "__main__":

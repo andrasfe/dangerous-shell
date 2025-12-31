@@ -1,15 +1,13 @@
-"""Remote client for nlsh - connects to nlsh-remote servers."""
+"""Remote client for nlsh - connects to nlsh-remote servers via SSH tunnel."""
 
 import os
 import sys
 import json
 import asyncio
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-import ssl as ssl_module
 import websockets
-from websockets.exceptions import ConnectionClosed
 
 # Add shared package to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,46 +29,28 @@ class RemoteClient:
         host: str,
         port: int,
         shared_secret: str,
-        timeout: float = 30.0,
-        ssl: bool = False,
-        ssl_verify: bool = True
+        timeout: float = 30.0
     ):
         """Initialize remote client.
 
         Args:
-            host: Remote server hostname/IP
-            port: Remote server port
+            host: Server hostname/IP (usually localhost via SSH tunnel)
+            port: Server port
             shared_secret: Shared secret for HMAC authentication
             timeout: Connection timeout in seconds
-            ssl: Use SSL/TLS (wss://) connection
-            ssl_verify: Verify SSL certificate (set False for self-signed certs)
         """
         self.host = host
         self.port = port
         self.shared_secret = shared_secret
         self.timeout = timeout
-        self.ssl = ssl
-        self.ssl_verify = ssl_verify
-        protocol = "wss" if ssl else "ws"
-        self.ws_url = f"{protocol}://{host}:{port}/ws"
+        self.ws_url = f"ws://{host}:{port}/ws"
         self._websocket = None
-        self._ssl_context = None
-
-        if ssl:
-            self._ssl_context = ssl_module.create_default_context()
-            if not ssl_verify:
-                self._ssl_context.check_hostname = False
-                self._ssl_context.verify_mode = ssl_module.CERT_NONE
 
     async def connect(self) -> bool:
-        """Connect to the remote server.
-
-        Returns:
-            True if connection successful
-        """
+        """Connect to the remote server."""
         try:
             self._websocket = await asyncio.wait_for(
-                websockets.connect(self.ws_url, ssl=self._ssl_context),
+                websockets.connect(self.ws_url),
                 timeout=self.timeout
             )
             return True
@@ -86,14 +66,7 @@ class RemoteClient:
             self._websocket = None
 
     async def _send_and_receive(self, message: dict[str, Any]) -> dict[str, Any]:
-        """Send a message and wait for response.
-
-        Args:
-            message: Signed message to send
-
-        Returns:
-            Response message dict
-        """
+        """Send a message and wait for response."""
         if not self._websocket:
             raise ConnectionError("Not connected to remote server")
 
@@ -117,16 +90,7 @@ class RemoteClient:
         cwd: str | None = None,
         timeout: int = 300
     ) -> CommandResponse:
-        """Execute a command on the remote server.
-
-        Args:
-            command: Shell command to execute
-            cwd: Working directory (default: server's cwd)
-            timeout: Command timeout in seconds
-
-        Returns:
-            CommandResponse with stdout, stderr, returncode
-        """
+        """Execute a command on the remote server."""
         request = CommandRequest(command=command, cwd=cwd, timeout=timeout)
         message = sign_message(
             self.shared_secret,
@@ -148,16 +112,7 @@ class RemoteClient:
         remote_path: str,
         mode: str = "0644"
     ) -> UploadResponse:
-        """Upload a file to the remote server.
-
-        Args:
-            local_path: Local file path to upload
-            remote_path: Destination path on remote server
-            mode: File permissions (octal string)
-
-        Returns:
-            UploadResponse with success status
-        """
+        """Upload a file to the remote server."""
         local_path = Path(local_path).expanduser().resolve()
         if not local_path.exists():
             raise FileNotFoundError(f"Local file not found: {local_path}")
@@ -185,15 +140,7 @@ class RemoteClient:
         remote_path: str,
         local_path: str | Path | None = None
     ) -> tuple[bytes, DownloadResponse]:
-        """Download a file from the remote server.
-
-        Args:
-            remote_path: Remote file path to download
-            local_path: Optional local path to save file
-
-        Returns:
-            Tuple of (file_data, DownloadResponse)
-        """
+        """Download a file from the remote server."""
         request = DownloadRequest(remote_path=remote_path)
         message = sign_message(
             self.shared_secret,
@@ -217,11 +164,7 @@ class RemoteClient:
         return download_response.data or b"", download_response
 
     async def ping(self) -> bool:
-        """Send a ping to check connection.
-
-        Returns:
-            True if pong received
-        """
+        """Send a ping to check connection."""
         message = sign_message(self.shared_secret, MessageType.PING, {"status": "ping"})
         response = await self._send_and_receive(message)
         return response["type"] == MessageType.PONG
@@ -237,78 +180,12 @@ class RemoteClient:
 
 
 def create_client_from_env() -> RemoteClient:
-    """Create a RemoteClient from environment variables.
-
-    Expected env vars:
-        NLSH_REMOTE_HOST: Remote server host
-        NLSH_REMOTE_PORT: Remote server port
-        NLSH_SHARED_SECRET: Shared secret for authentication
-        NLSH_SSL: Enable SSL (true/false, default: false)
-        NLSH_SSL_VERIFY: Verify SSL cert (true/false, default: true)
-
-    Returns:
-        Configured RemoteClient instance
-    """
-    host = os.getenv("NLSH_REMOTE_HOST")
-    port = os.getenv("NLSH_REMOTE_PORT")
+    """Create a RemoteClient from environment variables."""
+    host = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")
+    port = os.getenv("NLSH_REMOTE_PORT", "8765")
     secret = os.getenv("NLSH_SHARED_SECRET")
-    ssl_enabled = os.getenv("NLSH_SSL", "false").lower() in ("true", "1", "yes")
-    ssl_verify = os.getenv("NLSH_SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
-    if not host:
-        raise ValueError("NLSH_REMOTE_HOST not set")
-    if not port:
-        raise ValueError("NLSH_REMOTE_PORT not set")
     if not secret:
         raise ValueError("NLSH_SHARED_SECRET not set")
 
-    return RemoteClient(
-        host=host,
-        port=int(port),
-        shared_secret=secret,
-        ssl=ssl_enabled,
-        ssl_verify=ssl_verify
-    )
-
-
-# Synchronous wrappers for convenience
-def run_remote_command(
-    host: str,
-    port: int,
-    shared_secret: str,
-    command: str,
-    cwd: str | None = None
-) -> CommandResponse:
-    """Synchronous wrapper for remote command execution."""
-    async def _run():
-        async with RemoteClient(host, port, shared_secret) as client:
-            return await client.execute_command(command, cwd)
-    return asyncio.run(_run())
-
-
-def upload_file_sync(
-    host: str,
-    port: int,
-    shared_secret: str,
-    local_path: str,
-    remote_path: str
-) -> UploadResponse:
-    """Synchronous wrapper for file upload."""
-    async def _run():
-        async with RemoteClient(host, port, shared_secret) as client:
-            return await client.upload_file(local_path, remote_path)
-    return asyncio.run(_run())
-
-
-def download_file_sync(
-    host: str,
-    port: int,
-    shared_secret: str,
-    remote_path: str,
-    local_path: str | None = None
-) -> tuple[bytes, DownloadResponse]:
-    """Synchronous wrapper for file download."""
-    async def _run():
-        async with RemoteClient(host, port, shared_secret) as client:
-            return await client.download_file(remote_path, local_path)
-    return asyncio.run(_run())
+    return RemoteClient(host=host, port=int(port), shared_secret=secret)

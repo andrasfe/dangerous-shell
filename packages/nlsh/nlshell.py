@@ -56,12 +56,10 @@ HISTORY_FILE_REMOTE = Path.home() / ".nlshell_history_remote"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
 
-# Remote execution configuration
-REMOTE_HOST = os.getenv("NLSH_REMOTE_HOST")
+# Remote execution configuration (use SSH tunnel for security)
+REMOTE_HOST = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")
 REMOTE_PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
 REMOTE_SECRET = os.getenv("NLSH_SHARED_SECRET")
-REMOTE_SSL = os.getenv("NLSH_SSL", "false").lower() in ("true", "1", "yes")
-REMOTE_SSL_VERIFY = os.getenv("NLSH_SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
 # Audio settings
 AUDIO_SAMPLE_RATE = 16000  # 16kHz for speech recognition
@@ -371,9 +369,7 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
         async with RemoteClient(
             host=REMOTE_HOST,
             port=REMOTE_PORT,
-            shared_secret=REMOTE_SECRET,
-            ssl=REMOTE_SSL,
-            ssl_verify=REMOTE_SSL_VERIFY
+            shared_secret=REMOTE_SECRET
         ) as client:
             result = await client.execute_command(command, cwd=cwd)
             return result.success, result.stdout, result.stderr, result.returncode
