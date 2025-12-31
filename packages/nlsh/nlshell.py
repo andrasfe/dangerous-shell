@@ -46,6 +46,11 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 VOICE_MODEL = os.getenv("OPENROUTER_VOICE_MODEL", "google/gemini-2.5-flash-lite")
 SHELL_EXECUTABLE = os.getenv("NLSH_SHELL", os.getenv("SHELL", "/bin/bash"))
+
+# Local model configuration (LM Studio, Ollama, etc.)
+LOCAL_MODEL = os.getenv("NLSH_LOCAL_MODEL", "false").lower() in ("true", "1", "yes")
+LOCAL_MODEL_URL = os.getenv("NLSH_LOCAL_URL", "http://localhost:1234/v1")
+LOCAL_MODEL_NAME = os.getenv("NLSH_LOCAL_MODEL_NAME", "local-model")
 HISTORY_FILE = Path.home() / ".nlshell_history"
 COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
@@ -875,17 +880,27 @@ class NLShell:
         self.llm = None
         self.agent = None
 
-        if not OPENROUTER_API_KEY:
-            print("Error: OPENROUTER_API_KEY not set in .env file")
-            sys.exit(1)
+        # Create LLM - either local or OpenRouter
+        if LOCAL_MODEL:
+            print(f"\033[1;35m🏠 Using local model: {LOCAL_MODEL_URL}\033[0m")
+            self.llm = ChatOpenAI(
+                model=LOCAL_MODEL_NAME,
+                openai_api_key="not-needed",  # LM Studio doesn't require API key
+                openai_api_base=LOCAL_MODEL_URL,
+                temperature=0.1,
+            )
+        else:
+            if not OPENROUTER_API_KEY:
+                print("Error: OPENROUTER_API_KEY not set in .env file")
+                print("       Or set NLSH_LOCAL_MODEL=true to use a local model")
+                sys.exit(1)
 
-        # Create LLM using OpenRouter
-        self.llm = ChatOpenAI(
-            model=MODEL,
-            openai_api_key=OPENROUTER_API_KEY,
-            openai_api_base="https://openrouter.ai/api/v1",
-            temperature=0.1,
-        )
+            self.llm = ChatOpenAI(
+                model=MODEL,
+                openai_api_key=OPENROUTER_API_KEY,
+                openai_api_base="https://openrouter.ai/api/v1",
+                temperature=0.1,
+            )
 
         # Set global LLM instance for standalone fix function
         global _llm_instance
