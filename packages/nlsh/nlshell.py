@@ -579,7 +579,7 @@ def run_shell_command(
                         current_cmd = suggestion['command']
                         continue  # Run the suggested command
 
-                    next_response = input_no_history("\n\033[1;32mRun next command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                    next_response = input_no_history("\n\033[1;32mRun next command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
                     if next_response in ("y", "yes"):
                         current_cmd = suggestion['command']
                         continue  # Run the suggested command
@@ -588,6 +588,22 @@ def run_shell_command(
                         if edited:
                             current_cmd = edited
                             continue  # Run the edited command
+                    elif next_response in ("f", "feedback"):
+                        feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                        if feedback:
+                            # Re-generate next command with feedback
+                            print("\033[2m(thinking...)\033[0m")
+                            new_suggestion = generate_next_command(
+                                natural_request,
+                                current_cmd,
+                                stdout,
+                                f"Previous suggestion: {suggestion['command']}\nUser feedback: {feedback}"
+                            )
+                            if new_suggestion and new_suggestion.get("command"):
+                                suggestion = new_suggestion
+                                print(f"\n\033[1;36mNext command:\033[0m {suggestion['command']}")
+                                print(f"\033[1;33mReason:\033[0m {suggestion['explanation']}")
+                                continue  # Loop back for confirmation
 
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
@@ -621,7 +637,7 @@ def run_shell_command(
                 current_cmd = fixed_cmd
                 continue  # Re-run with fixed command
 
-            run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+            run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
             if run_fix in ("y", "yes"):
                 current_cmd = fixed_cmd
                 continue  # Re-run with fixed command
@@ -630,6 +646,22 @@ def run_shell_command(
                 if edited:
                     current_cmd = edited
                     continue  # Re-run with edited command
+            elif run_fix in ("f", "feedback"):
+                feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                if feedback:
+                    # Re-generate fix with feedback
+                    print("\033[2m(analyzing error...)\033[0m")
+                    fix_result = fix_failed_command_standalone(
+                        current_cmd,
+                        f"{stderr}\nPrevious fix suggestion: {fixed_cmd}\nUser feedback: {feedback}",
+                        returncode
+                    )
+                    if fix_result and fix_result.get("fixed_command"):
+                        fixed_cmd = fix_result["fixed_command"]
+                        fix_explanation = fix_result.get("explanation", "")
+                        print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
+                        print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
+                        continue  # Loop back for confirmation
 
             return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
 
@@ -1340,7 +1372,7 @@ Respond conversationally. Be concise but helpful."""
                                     current_cmd = fixed_cmd
                                     continue  # Re-run with fixed command
 
-                                run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                                run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
                                 if run_fix in ("y", "yes"):
                                     current_cmd = fixed_cmd
                                     continue  # Re-run with fixed command
@@ -1349,6 +1381,22 @@ Respond conversationally. Be concise but helpful."""
                                     if edited:
                                         current_cmd = edited
                                         continue  # Re-run with edited command
+                                elif run_fix in ("f", "feedback"):
+                                    feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                                    if feedback:
+                                        # Re-generate fix with feedback
+                                        print("\033[2m(analyzing error...)\033[0m")
+                                        fix_result = self.fix_failed_command(
+                                            current_cmd,
+                                            f"{result.stderr}\nPrevious fix suggestion: {fixed_cmd}\nUser feedback: {feedback}",
+                                            result.returncode
+                                        )
+                                        if fix_result and fix_result.get("fixed_command"):
+                                            fixed_cmd = fix_result["fixed_command"]
+                                            explanation = fix_result.get("explanation", "")
+                                            print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
+                                            print(f"\033[1;33mExplanation:\033[0m {explanation}")
+                                            continue  # Loop back for confirmation
                                 break
                         continue
                     elif response in ("n", "no"):
