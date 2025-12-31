@@ -50,12 +50,19 @@ python nlshell.py
 
 ### Remote Execution
 
-1. Start tunnel to remote server:
+1. Configure `.env`:
    ```bash
-   ./tunnel.sh user@remote-host
+   NLSH_REMOTE_USER=your_username
+   NLSH_REMOTE_HOST=192.168.1.100
+   NLSH_SHARED_SECRET=your_secret
    ```
 
-2. Run nlsh with remote flag:
+2. Start SSH tunnel:
+   ```bash
+   ./tunnel.sh
+   ```
+
+3. In another terminal:
    ```bash
    python nlshell.py --remote
    ```
