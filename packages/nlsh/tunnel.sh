@@ -12,15 +12,15 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 USER="${NLSH_REMOTE_USER:-}"
-HOST="${NLSH_REMOTE_IP:-}"
+HOST="${NLSH_REMOTE_HOST:-}"
 PORT="${NLSH_REMOTE_PORT:-8765}"
 
 if [ -z "$USER" ] || [ -z "$HOST" ]; then
-    echo "Error: NLSH_REMOTE_USER and NLSH_REMOTE_IP must be set in .env"
+    echo "Error: NLSH_REMOTE_USER and NLSH_REMOTE_HOST must be set in .env"
     echo ""
     echo "Add to .env:"
     echo "  NLSH_REMOTE_USER=your_username"
-    echo "  NLSH_REMOTE_IP=192.168.1.100"
+    echo "  NLSH_REMOTE_HOST=192.168.1.100"
     exit 1
 fi
 

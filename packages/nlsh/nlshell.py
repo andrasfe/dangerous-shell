@@ -57,7 +57,6 @@ COMMAND_LOG_FILE = Path.home() / ".nlshell_command_log"
 HISTORY_CONTEXT_SIZE = 20
 
 # Remote execution configuration (use SSH tunnel for security)
-REMOTE_HOST = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")
 REMOTE_PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
 REMOTE_SECRET = os.getenv("NLSH_SHARED_SECRET")
 
@@ -367,7 +366,7 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
 
     async def _run():
         async with RemoteClient(
-            host=REMOTE_HOST,
+            host="127.0.0.1",  # Always localhost (through SSH tunnel)
             port=REMOTE_PORT,
             shared_secret=REMOTE_SECRET
         ) as client:
