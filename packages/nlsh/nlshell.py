@@ -154,6 +154,19 @@ def get_system_prompt() -> str:
     return SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
 
 
+def input_no_history(prompt: str = "") -> str:
+    """Get input without adding to readline history."""
+    # Get current history length
+    hist_len = readline.get_current_history_length()
+    result = input(prompt)
+    # Remove any items added during this input
+    new_len = readline.get_current_history_length()
+    for _ in range(new_len - hist_len):
+        readline.remove_history_item(new_len - 1)
+        new_len -= 1
+    return result
+
+
 def load_recent_history(limit: int = HISTORY_CONTEXT_SIZE) -> list[dict]:
     """Load recent command history for context."""
     history: list[dict] = []
@@ -216,7 +229,7 @@ def confirm_execution(command: str, explanation: str, warning: str | None = None
         return True, command
 
     while True:
-        response = input("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
         if response in ("y", "yes"):
             return True, command
         elif response in ("n", "no"):
@@ -559,7 +572,7 @@ def run_shell_command(
                         current_cmd = suggestion['command']
                         continue  # Run the suggested command
 
-                    next_response = input("\n\033[1;32mRun next command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                    next_response = input_no_history("\n\033[1;32mRun next command? [y/n/e(dit)]:\033[0m ").strip().lower()
                     if next_response in ("y", "yes"):
                         current_cmd = suggestion['command']
                         continue  # Run the suggested command
@@ -579,7 +592,7 @@ def run_shell_command(
             if SKIP_PERMISSIONS:
                 fix_response = "y"
             else:
-                fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+                fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
                 return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
 
@@ -601,7 +614,7 @@ def run_shell_command(
                 current_cmd = fixed_cmd
                 continue  # Re-run with fixed command
 
-            run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+            run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
             if run_fix in ("y", "yes"):
                 current_cmd = fixed_cmd
                 continue  # Re-run with fixed command
@@ -1229,7 +1242,7 @@ Respond conversationally. Be concise but helpful."""
                 # Check if input looks like a shell command (using LLM)
                 if looks_like_shell_command(user_input):
                     print(f"\n\033[1;33mThis looks like a shell command.\033[0m")
-                    response = input("\033[1;32mRun as-is? [y/n/i(nterpret)]:\033[0m ").strip().lower()
+                    response = input_no_history("\033[1;32mRun as-is? [y/n/i(nterpret)]:\033[0m ").strip().lower()
                     if response in ("y", "yes"):
                         # Check if interactive mode needed for passwords
                         if requires_interactive_mode(user_input):
@@ -1276,7 +1289,7 @@ Respond conversationally. Be concise but helpful."""
                                 if SKIP_PERMISSIONS:
                                     fix_response = "y"
                                 else:
-                                    fix_response = input("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
+                                    fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
                                 if fix_response not in ("y", "yes"):
                                     break
 
@@ -1298,7 +1311,7 @@ Respond conversationally. Be concise but helpful."""
                                     current_cmd = fixed_cmd
                                     continue  # Re-run with fixed command
 
-                                run_fix = input("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
+                                run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)]:\033[0m ").strip().lower()
                                 if run_fix in ("y", "yes"):
                                     current_cmd = fixed_cmd
                                     continue  # Re-run with fixed command
