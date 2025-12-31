@@ -6,9 +6,17 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load .env if exists
+# Load .env if exists (only lines with = that don't start with #)
 if [ -f "$SCRIPT_DIR/.env" ]; then
-    export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ "$key" =~ ^#.*$ ]] && continue
+        [[ -z "$key" ]] && continue
+        # Remove leading/trailing whitespace and export
+        key=$(echo "$key" | xargs)
+        value=$(echo "$value" | xargs)
+        [[ -n "$key" && -n "$value" ]] && export "$key=$value"
+    done < "$SCRIPT_DIR/.env"
 fi
 
 USER="${NLSH_REMOTE_USER:-}"
