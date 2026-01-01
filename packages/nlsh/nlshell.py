@@ -117,6 +117,8 @@ Your primary function is to translate natural language requests into zsh shell c
 1. `run_shell_command` - Execute shell commands (asks user for confirmation)
 2. `read_file` - Read contents of files (README, requirements.txt, setup.py, etc.)
 3. `list_directory` - List files in a directory
+4. `upload_file` - Upload a file from LOCAL machine to REMOTE server (remote mode only)
+5. `download_file` - Download a file from REMOTE server to LOCAL machine (remote mode only)
 
 ## How to work:
 1. When the user describes what they want to do, determine the appropriate action
@@ -139,6 +141,14 @@ Your primary function is to translate natural language requests into zsh shell c
 - Use the execution history to understand context (e.g., "do that again", "same but for X")
 - Keep responses concise - this is a command line interface
 - When installing projects, ALWAYS read the documentation first to understand requirements
+
+## Remote Mode (when active):
+In remote mode, `run_shell_command` executes on the REMOTE server, not locally.
+- For LOCAL to REMOTE file transfer: use `upload_file` (NOT scp/rsync via run_shell_command)
+- For REMOTE to LOCAL file transfer: use `download_file` (NOT scp/rsync via run_shell_command)
+- Paths like ~/.nlsh/, ~/.ssh/ in user requests typically refer to LOCAL files
+- Environment variables like NLSH_REMOTE_HOST exist on LOCAL, not on the remote server
+- When user says "copy X to the server", X is a LOCAL file - use upload_file
 
 ## Context:
 - Shell: {shell_name} (commands run via {shell_path})
@@ -352,6 +362,94 @@ def list_directory(
         return f"Error: Permission denied accessing {directory}"
     except Exception as e:
         return f"Error listing directory: {e}"
+
+
+def upload_file(
+    local_path: Annotated[str, "Path to the LOCAL file to upload (on your machine, not the remote server)"],
+    remote_path: Annotated[str, "Destination path on the REMOTE server"],
+    mode: Annotated[str, "Unix file permissions (e.g., '0644' for rw-r--r--, '0755' for executable)"] = "0644",
+) -> str:
+    """
+    Upload a file from the LOCAL machine to the REMOTE server.
+
+    IMPORTANT: In remote mode, run_shell_command executes on the REMOTE server.
+    To transfer files FROM your local machine TO the remote, use this tool instead of scp/rsync.
+
+    Args:
+        local_path: Path on YOUR LOCAL machine (e.g., ~/.nlsh/keys/mcp_public.key)
+        remote_path: Destination path on the REMOTE server (e.g., ~/.nlsh/keys/mcp_public.key)
+        mode: Unix permissions for the uploaded file
+
+    Returns:
+        Success message or error
+    """
+    if not REMOTE_MODE:
+        return "Error: upload_file is only available in remote mode (--remote)"
+
+    if not REMOTE_AVAILABLE or _remote_client is None:
+        return "Error: Remote client not available"
+
+    async def _upload():
+        async with RemoteClient(
+            host="127.0.0.1",
+            port=REMOTE_PORT,
+            shared_secret=REMOTE_SECRET
+        ) as client:
+            result = await client.upload_file(local_path, remote_path, mode)
+            return result
+
+    try:
+        result = asyncio.run(_upload())
+        if result.success:
+            return f"Successfully uploaded {local_path} to {remote_path} ({result.bytes_written} bytes)"
+        else:
+            return f"Upload failed: {result.message}"
+    except FileNotFoundError:
+        return f"Error: Local file not found: {local_path}"
+    except Exception as e:
+        return f"Error uploading file: {e}"
+
+
+def download_file(
+    remote_path: Annotated[str, "Path to the file on the REMOTE server"],
+    local_path: Annotated[str, "Destination path on your LOCAL machine"],
+) -> str:
+    """
+    Download a file from the REMOTE server to the LOCAL machine.
+
+    IMPORTANT: In remote mode, run_shell_command executes on the REMOTE server.
+    To transfer files FROM the remote TO your local machine, use this tool instead of scp/rsync.
+
+    Args:
+        remote_path: Path on the REMOTE server (e.g., /var/log/app.log)
+        local_path: Destination path on YOUR LOCAL machine (e.g., ./app.log)
+
+    Returns:
+        Success message or error
+    """
+    if not REMOTE_MODE:
+        return "Error: download_file is only available in remote mode (--remote)"
+
+    if not REMOTE_AVAILABLE or _remote_client is None:
+        return "Error: Remote client not available"
+
+    async def _download():
+        async with RemoteClient(
+            host="127.0.0.1",
+            port=REMOTE_PORT,
+            shared_secret=REMOTE_SECRET
+        ) as client:
+            data, result = await client.download_file(remote_path, local_path)
+            return result
+
+    try:
+        result = asyncio.run(_download())
+        if result.success:
+            return f"Successfully downloaded {remote_path} to {local_path} ({result.size} bytes)"
+        else:
+            return f"Download failed: {result.message}"
+    except Exception as e:
+        return f"Error downloading file: {e}"
 
 
 # Commands that may require password input - run these interactively
@@ -964,7 +1062,7 @@ class NLShell:
         # Create the deep agent with our tools
         self.agent = create_deep_agent(
             model=self.llm,
-            tools=[run_shell_command, read_file, list_directory],
+            tools=[run_shell_command, read_file, list_directory, upload_file, download_file],
             system_prompt=get_system_prompt(),
         )
 
