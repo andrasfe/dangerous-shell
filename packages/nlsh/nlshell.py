@@ -635,6 +635,38 @@ def download_file(
 # Commands that may require password input - run these interactively
 INTERACTIVE_COMMANDS = {'sudo', 'su', 'ssh', 'scp', 'sftp', 'passwd', 'kinit', 'docker login', 'npm login', 'gh auth'}
 
+# Error patterns in stderr that indicate failure even with exit code 0
+ERROR_PATTERNS = [
+    'error:',
+    'Error:',
+    'ERROR:',
+    'unknown primary',
+    'unknown option',
+    'invalid option',
+    'not found',
+    'No such file',
+    'Permission denied',
+    'cannot ',
+    'failed to ',
+    'fatal:',
+    'FATAL:',
+]
+
+
+def has_stderr_errors(stderr: str) -> bool:
+    """Check if stderr contains error patterns indicating command failure.
+
+    Some commands exit with code 0 even when they encounter errors
+    (e.g., BSD find with invalid options). This function detects such cases.
+    """
+    if not stderr:
+        return False
+    stderr_lower = stderr.lower()
+    for pattern in ERROR_PATTERNS:
+        if pattern.lower() in stderr_lower:
+            return True
+    return False
+
 
 def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, str, str, int]:
     """Execute a command on the remote server.
@@ -837,7 +869,9 @@ def run_shell_command(
                 print(f"\033[1;31m{stderr}\033[0m", end="")
                 output_parts.append(f"STDERR:\n{stderr}")
 
-            if returncode == 0:
+            # Check for success - exit code 0 AND no error patterns in stderr
+            stderr_has_errors = has_stderr_errors(stderr)
+            if returncode == 0 and not stderr_has_errors:
                 print(f"\033[1;32m✓ Command completed successfully\033[0m")
                 log_command(natural_request, current_cmd, True)
                 shell_state.last_command = current_cmd
@@ -917,7 +951,7 @@ def run_shell_command(
                 current_cmd = approved_cmd
                 continue  # Re-run with fixed/edited command
 
-            return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
+            return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
 
         except subprocess.TimeoutExpired:
             log_command(natural_request, current_cmd, False)
@@ -1597,7 +1631,9 @@ Respond conversationally. Be concise but helpful."""
                             if result.stderr:
                                 print(f"\033[1;31m{result.stderr}\033[0m", end="")
 
-                            if result.returncode == 0:
+                            # Check for success - exit code 0 AND no error patterns in stderr
+                            stderr_has_errors = has_stderr_errors(result.stderr)
+                            if result.returncode == 0 and not stderr_has_errors:
                                 print(f"\033[1;32m✓ Command completed successfully\033[0m")
                                 log_command(user_input, current_cmd, True)
                                 break
