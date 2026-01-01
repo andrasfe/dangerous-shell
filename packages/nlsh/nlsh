@@ -47,4 +47,5 @@ if [[ ! -f ".env" ]]; then
     exit 1
 fi
 
-python3 nlshell.py "$@"
+# Use the venv's python (not system python3)
+.venv/bin/python nlshell.py "$@"
