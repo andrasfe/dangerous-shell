@@ -392,12 +392,17 @@ def upload_file(
     # Confirm before upload
     print(f"\n\033[1;36mUpload:\033[0m {local_path} -> {remote_path}")
     if not SKIP_PERMISSIONS:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
         if response in ("e", "edit"):
             new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
             new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
             local_path = new_local if new_local else local_path
             remote_path = new_remote if new_remote else remote_path
+        elif response in ("f", "feedback"):
+            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            if feedback:
+                return f"User feedback on upload '{local_path}' -> '{remote_path}': {feedback}. Please adjust the file transfer based on this feedback."
+            return "Upload cancelled by user."
         elif response not in ("y", "yes"):
             return "Upload cancelled by user."
 
@@ -448,12 +453,17 @@ def download_file(
     # Confirm before download
     print(f"\n\033[1;36mDownload:\033[0m {remote_path} -> {local_path}")
     if not SKIP_PERMISSIONS:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
         if response in ("e", "edit"):
             new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
             new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
             remote_path = new_remote if new_remote else remote_path
             local_path = new_local if new_local else local_path
+        elif response in ("f", "feedback"):
+            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            if feedback:
+                return f"User feedback on download '{remote_path}' -> '{local_path}': {feedback}. Please adjust the file transfer based on this feedback."
+            return "Download cancelled by user."
         elif response not in ("y", "yes"):
             return "Download cancelled by user."
 
