@@ -77,10 +77,12 @@ class RemoteClient:
         )
         response = json.loads(response_text)
 
-        # Verify response signature
-        is_valid, error = verify_message(self.shared_secret, response)
-        if not is_valid:
-            raise ValueError(f"Invalid response signature: {error}")
+        # Verify response signature if present (legacy HMAC mode)
+        # In asymmetric mode, server sends unsigned responses over trusted SSH tunnel
+        if "signature" in response:
+            is_valid, error = verify_message(self.shared_secret, response)
+            if not is_valid:
+                raise ValueError(f"Invalid response signature: {error}")
 
         return response
 
