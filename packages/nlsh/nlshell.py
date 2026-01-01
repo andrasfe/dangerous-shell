@@ -84,6 +84,7 @@ class ShellState:
         self.last_output = None
         self.conversation_history = []  # Track conversation for context
         self.max_history = 20  # Keep last N exchanges
+        self.skip_llm_response = False  # Flag to skip LLM after user declines action
 
     def add_to_history(self, role: str, content: str):
         """Add a message to conversation history."""
@@ -617,7 +618,8 @@ def run_shell_command(
             else:
                 fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
-                return f"Execution FAILED (exit code {returncode}). User declined fix - do not suggest another command, wait for next user input.\n" + "\n".join(output_parts)
+                shell_state.skip_llm_response = True
+                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
 
             print("\033[2m(analyzing error...)\033[0m")
             fix_result = fix_failed_command_standalone(current_cmd, stderr, returncode)
@@ -1131,6 +1133,11 @@ Respond conversationally. Be concise but helpful."""
             result = self.agent.invoke({
                 "messages": [{"role": "user", "content": full_input}]
             })
+
+            # Check if we should skip LLM response (user declined an action)
+            if shell_state.skip_llm_response:
+                shell_state.skip_llm_response = False
+                return
 
             # Get the final response
             final_message = result["messages"][-1]
