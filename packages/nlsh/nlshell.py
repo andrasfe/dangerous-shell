@@ -15,7 +15,8 @@ import wave
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import Annotated
+from dataclasses import dataclass
+from typing import Annotated, Callable, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -223,39 +224,118 @@ def log_command(natural_input: str, command: str, success: bool):
         pass
 
 
-def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool, str | None]:
-    """Ask user to confirm command execution."""
-    print(f"\n\033[1;36mCommand:\033[0m {command}")
-    print(f"\033[1;33mExplanation:\033[0m {explanation}")
+# ============================================================================
+# Confirmation System
+# ============================================================================
+
+@dataclass
+class ConfirmationResult:
+    """Result of a user confirmation prompt."""
+    approved: bool
+    edited_values: Optional[dict] = None  # {field_name: new_value}
+    feedback: Optional[str] = None
+
+    @property
+    def is_feedback(self) -> bool:
+        return self.feedback is not None
+
+
+def confirm_action(
+    action_type: str,
+    description: str,
+    editable_fields: Optional[dict] = None,
+    warning: Optional[str] = None,
+    prompt_text: str = "Execute?",
+) -> ConfirmationResult:
+    """
+    Generic confirmation prompt supporting edit and feedback.
+
+    Args:
+        action_type: Label for the action (e.g., "Command", "Upload", "Download")
+        description: What will happen (main content to display)
+        editable_fields: Dict of {label: current_value} for edit mode.
+                        If None, edit returns single value in edited_values["value"]
+        warning: Optional warning message
+        prompt_text: The question to ask (default: "Execute?")
+
+    Returns:
+        ConfirmationResult with approval status, edited values, or feedback
+    """
+    print(f"\n\033[1;36m{action_type}:\033[0m {description}")
 
     if warning:
         print(f"\033[1;31mWarning:\033[0m {warning}")
 
-    # Skip confirmation if --dangerously-skip-permissions flag is set
     if SKIP_PERMISSIONS:
         print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
-        return True, command
+        return ConfirmationResult(approved=True, edited_values=editable_fields)
 
     while True:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
+        response = input_no_history(f"\n\033[1;32m{prompt_text} [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
+
         if response in ("y", "yes"):
-            return True, command
+            return ConfirmationResult(approved=True, edited_values=editable_fields)
+
         elif response in ("n", "no"):
-            return False, None
+            return ConfirmationResult(approved=False)
+
         elif response in ("e", "edit"):
-            edited = input("\033[1;34mEdit command:\033[0m ").strip()
-            if edited:
-                return True, edited
-            print("Empty command, cancelling.")
-            return False, None
+            if editable_fields is None:
+                # Single value edit (for commands)
+                edited = input_no_history("\033[1;34mEdit:\033[0m ").strip()
+                if edited:
+                    return ConfirmationResult(approved=True, edited_values={"value": edited})
+                print("Empty value, cancelling.")
+                return ConfirmationResult(approved=False)
+            else:
+                # Multi-field edit (for file transfers, etc.)
+                new_values = {}
+                for label, current in editable_fields.items():
+                    new_val = input_no_history(f"\033[1;34m{label} [{current}]:\033[0m ").strip()
+                    new_values[label] = new_val if new_val else current
+                return ConfirmationResult(approved=True, edited_values=new_values)
+
         elif response in ("f", "feedback"):
-            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
             if feedback:
-                return "feedback", feedback
+                return ConfirmationResult(approved=False, feedback=feedback)
             print("Empty feedback, cancelling.")
-            return False, None
+            return ConfirmationResult(approved=False)
+
         else:
             print("Please enter 'y', 'n', 'e', or 'f'")
+
+
+def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool, str | None]:
+    """Ask user to confirm command execution.
+
+    Uses confirm_action() internally but maintains backward-compatible return type.
+
+    Returns:
+        Tuple of (approved, value) where:
+        - (True, command) if approved (possibly edited)
+        - (False, None) if cancelled
+        - ("feedback", feedback_text) if user provided feedback
+    """
+    # Display explanation separately (confirm_action only shows one line)
+    print(f"\033[1;33mExplanation:\033[0m {explanation}")
+
+    result = confirm_action(
+        action_type="Command",
+        description=command,
+        editable_fields=None,  # Single value edit mode
+        warning=warning,
+    )
+
+    if result.is_feedback:
+        return "feedback", result.feedback
+    elif result.approved:
+        # Return edited command if user edited, otherwise original
+        if result.edited_values and "value" in result.edited_values:
+            return True, result.edited_values["value"]
+        return True, command
+    else:
+        return False, None
 
 
 def read_file(
@@ -390,21 +470,21 @@ def upload_file(
         return "Error: Remote client not available"
 
     # Confirm before upload
-    print(f"\n\033[1;36mUpload:\033[0m {local_path} -> {remote_path}")
-    if not SKIP_PERMISSIONS:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
-        if response in ("e", "edit"):
-            new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
-            new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
-            local_path = new_local if new_local else local_path
-            remote_path = new_remote if new_remote else remote_path
-        elif response in ("f", "feedback"):
-            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
-            if feedback:
-                return f"User feedback on upload '{local_path}' -> '{remote_path}': {feedback}. Please adjust the file transfer based on this feedback."
-            return "Upload cancelled by user."
-        elif response not in ("y", "yes"):
-            return "Upload cancelled by user."
+    result = confirm_action(
+        action_type="Upload",
+        description=f"{local_path} -> {remote_path}",
+        editable_fields={"Local path": local_path, "Remote path": remote_path},
+    )
+
+    if result.is_feedback:
+        return f"User feedback on upload '{local_path}' -> '{remote_path}': {result.feedback}. Please adjust the file transfer based on this feedback."
+    if not result.approved:
+        return "Upload cancelled by user."
+
+    # Use edited paths if provided
+    if result.edited_values:
+        local_path = result.edited_values.get("Local path", local_path)
+        remote_path = result.edited_values.get("Remote path", remote_path)
 
     async def _upload():
         async with RemoteClient(
@@ -451,21 +531,21 @@ def download_file(
         return "Error: Remote client not available"
 
     # Confirm before download
-    print(f"\n\033[1;36mDownload:\033[0m {remote_path} -> {local_path}")
-    if not SKIP_PERMISSIONS:
-        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
-        if response in ("e", "edit"):
-            new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
-            new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
-            remote_path = new_remote if new_remote else remote_path
-            local_path = new_local if new_local else local_path
-        elif response in ("f", "feedback"):
-            feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
-            if feedback:
-                return f"User feedback on download '{remote_path}' -> '{local_path}': {feedback}. Please adjust the file transfer based on this feedback."
-            return "Download cancelled by user."
-        elif response not in ("y", "yes"):
-            return "Download cancelled by user."
+    result = confirm_action(
+        action_type="Download",
+        description=f"{remote_path} -> {local_path}",
+        editable_fields={"Remote path": remote_path, "Local path": local_path},
+    )
+
+    if result.is_feedback:
+        return f"User feedback on download '{remote_path}' -> '{local_path}': {result.feedback}. Please adjust the file transfer based on this feedback."
+    if not result.approved:
+        return "Download cancelled by user."
+
+    # Use edited paths if provided
+    if result.edited_values:
+        remote_path = result.edited_values.get("Remote path", remote_path)
+        local_path = result.edited_values.get("Local path", local_path)
 
     async def _download():
         async with RemoteClient(
@@ -717,20 +797,19 @@ def run_shell_command(
                         current_cmd = suggestion['command']
                         continue  # Run the suggested command
                     elif next_response in ("e", "edit"):
-                        edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                        edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
                         if edited:
                             current_cmd = edited
                             continue  # Run the edited command
                     elif next_response in ("f", "feedback"):
-                        feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                        feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
                         if feedback:
                             # Re-generate next command with feedback
                             print("\033[2m(thinking...)\033[0m")
-                            new_suggestion = generate_next_command(
-                                natural_request,
+                            new_suggestion = suggest_next_command(
                                 current_cmd,
-                                stdout,
-                                f"Previous suggestion: {suggestion['command']}\nUser feedback: {feedback}"
+                                f"{stdout}\nPrevious suggestion: {suggestion['command']}\nUser feedback: {feedback}",
+                                natural_request
                             )
                             if new_suggestion and new_suggestion.get("command"):
                                 suggestion = new_suggestion
@@ -776,12 +855,12 @@ def run_shell_command(
                 current_cmd = fixed_cmd
                 continue  # Re-run with fixed command
             elif run_fix in ("e", "edit"):
-                edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
                 if edited:
                     current_cmd = edited
                     continue  # Re-run with edited command
             elif run_fix in ("f", "feedback"):
-                feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
                 if feedback:
                     # Re-generate fix with feedback
                     print("\033[2m(analyzing error...)\033[0m")
@@ -1516,12 +1595,12 @@ Respond conversationally. Be concise but helpful."""
                                     current_cmd = fixed_cmd
                                     continue  # Re-run with fixed command
                                 elif run_fix in ("e", "edit"):
-                                    edited = input("\033[1;34mEdit command:\033[0m ").strip()
+                                    edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
                                     if edited:
                                         current_cmd = edited
                                         continue  # Re-run with edited command
                                 elif run_fix in ("f", "feedback"):
-                                    feedback = input("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                                    feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
                                     if feedback:
                                         # Re-generate fix with feedback
                                         print("\033[2m(analyzing error...)\033[0m")
