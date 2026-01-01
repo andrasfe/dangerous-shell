@@ -306,6 +306,71 @@ def confirm_action(
             print("Please enter 'y', 'n', 'e', or 'f'")
 
 
+def confirm_suggested_command(
+    initial_cmd: str,
+    initial_explanation: str,
+    action_label: str,
+    explanation_label: str = "Explanation",
+    prompt_text: str = "Run?",
+    regenerate_fn: Optional[Callable[[str, str], Optional[dict]]] = None,
+    thinking_message: str = "(thinking...)",
+) -> Optional[str]:
+    """
+    Confirm a suggested command with optional feedback-based regeneration.
+
+    This function handles the display + confirmation loop internally,
+    properly looping back to re-prompt after regeneration (fixing a bug
+    where feedback would cause re-execution instead of re-confirmation).
+
+    Args:
+        initial_cmd: The initially suggested command
+        initial_explanation: Why this command is suggested
+        action_label: Label for the command line (e.g., "Suggested fix", "Next command")
+        explanation_label: Label for explanation line (e.g., "Explanation", "Reason")
+        prompt_text: The prompt question (e.g., "Run fixed command?")
+        regenerate_fn: Function(prev_suggestion, feedback) -> {"command": ..., "explanation": ...}
+                      The caller should capture any additional context in the closure.
+        thinking_message: Message to show while regenerating
+
+    Returns:
+        The command to run (possibly edited), or None if declined.
+    """
+    current_cmd = initial_cmd
+    current_explanation = initial_explanation
+
+    while True:
+        print(f"\n\033[1;36m{action_label}:\033[0m {current_cmd}")
+        print(f"\033[1;33m{explanation_label}:\033[0m {current_explanation}")
+
+        if SKIP_PERMISSIONS:
+            print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+            return current_cmd
+
+        response = input_no_history(f"\n\033[1;32m{prompt_text} [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
+
+        if response in ("y", "yes"):
+            return current_cmd
+        elif response in ("n", "no"):
+            return None
+        elif response in ("e", "edit"):
+            edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
+            if edited:
+                return edited
+            # Empty edit -> loop back to prompt
+        elif response in ("f", "feedback"):
+            if regenerate_fn is None:
+                continue
+            feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            if feedback:
+                print(f"\033[2m{thinking_message}\033[0m")
+                new_result = regenerate_fn(current_cmd, feedback)
+                if new_result and new_result.get("command"):
+                    current_cmd = new_result["command"]
+                    current_explanation = new_result.get("explanation", "")
+            # Loop back to display + prompt with new (or same) suggestion
+        # For any other response, loop back to prompt
+
+
 def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool, str | None]:
     """Ask user to confirm command execution.
 
@@ -784,38 +849,26 @@ def run_shell_command(
 
                 suggestion = suggest_next_command(current_cmd, full_output, natural_request)
                 if suggestion:
-                    print(f"\n\033[1;36mSuggested next:\033[0m {suggestion['command']}")
-                    print(f"\033[1;33mReason:\033[0m {suggestion['explanation']}")
+                    # Create regenerate function with captured context
+                    def regenerate_next(prev_suggestion: str, feedback: str) -> Optional[dict]:
+                        return suggest_next_command(
+                            current_cmd,
+                            f"{full_output}\nPrevious suggestion: {prev_suggestion}\nUser feedback: {feedback}",
+                            natural_request
+                        )
 
-                    if SKIP_PERMISSIONS:
-                        print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
-                        current_cmd = suggestion['command']
-                        continue  # Run the suggested command
-
-                    next_response = input_no_history("\n\033[1;32mRun next command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
-                    if next_response in ("y", "yes"):
-                        current_cmd = suggestion['command']
-                        continue  # Run the suggested command
-                    elif next_response in ("e", "edit"):
-                        edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
-                        if edited:
-                            current_cmd = edited
-                            continue  # Run the edited command
-                    elif next_response in ("f", "feedback"):
-                        feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
-                        if feedback:
-                            # Re-generate next command with feedback
-                            print("\033[2m(thinking...)\033[0m")
-                            new_suggestion = suggest_next_command(
-                                current_cmd,
-                                f"{stdout}\nPrevious suggestion: {suggestion['command']}\nUser feedback: {feedback}",
-                                natural_request
-                            )
-                            if new_suggestion and new_suggestion.get("command"):
-                                suggestion = new_suggestion
-                                print(f"\n\033[1;36mNext command:\033[0m {suggestion['command']}")
-                                print(f"\033[1;33mReason:\033[0m {suggestion['explanation']}")
-                                continue  # Loop back for confirmation
+                    next_cmd = confirm_suggested_command(
+                        initial_cmd=suggestion['command'],
+                        initial_explanation=suggestion['explanation'],
+                        action_label="Suggested next",
+                        explanation_label="Reason",
+                        prompt_text="Run next command?",
+                        regenerate_fn=regenerate_next,
+                        thinking_message="(thinking...)",
+                    )
+                    if next_cmd:
+                        current_cmd = next_cmd
+                        continue  # Run the suggested/edited command
 
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
@@ -842,39 +895,26 @@ def run_shell_command(
             fixed_cmd = fix_result["fixed_command"]
             fix_explanation = fix_result.get("explanation", "")
 
-            print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
-            print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
+            # Create regenerate function with captured context
+            def regenerate_fix(prev_suggestion: str, feedback: str) -> Optional[dict]:
+                return fix_failed_command_standalone(
+                    current_cmd,
+                    f"{stderr}\nPrevious fix suggestion: {prev_suggestion}\nUser feedback: {feedback}",
+                    returncode
+                )
 
-            if SKIP_PERMISSIONS:
-                print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
-                current_cmd = fixed_cmd
-                continue  # Re-run with fixed command
-
-            run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
-            if run_fix in ("y", "yes"):
-                current_cmd = fixed_cmd
-                continue  # Re-run with fixed command
-            elif run_fix in ("e", "edit"):
-                edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
-                if edited:
-                    current_cmd = edited
-                    continue  # Re-run with edited command
-            elif run_fix in ("f", "feedback"):
-                feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
-                if feedback:
-                    # Re-generate fix with feedback
-                    print("\033[2m(analyzing error...)\033[0m")
-                    fix_result = fix_failed_command_standalone(
-                        current_cmd,
-                        f"{stderr}\nPrevious fix suggestion: {fixed_cmd}\nUser feedback: {feedback}",
-                        returncode
-                    )
-                    if fix_result and fix_result.get("fixed_command"):
-                        fixed_cmd = fix_result["fixed_command"]
-                        fix_explanation = fix_result.get("explanation", "")
-                        print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
-                        print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
-                        continue  # Loop back for confirmation
+            approved_cmd = confirm_suggested_command(
+                initial_cmd=fixed_cmd,
+                initial_explanation=fix_explanation,
+                action_label="Suggested fix",
+                explanation_label="Explanation",
+                prompt_text="Run fixed command?",
+                regenerate_fn=regenerate_fix,
+                thinking_message="(analyzing error...)",
+            )
+            if approved_cmd:
+                current_cmd = approved_cmd
+                continue  # Re-run with fixed/edited command
 
             return f"Execution FAILED (exit code {result.returncode})\n" + "\n".join(output_parts)
 
@@ -1582,39 +1622,28 @@ Respond conversationally. Be concise but helpful."""
                                 fixed_cmd = fix_result["fixed_command"]
                                 explanation = fix_result.get("explanation", "")
 
-                                print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
-                                print(f"\033[1;33mExplanation:\033[0m {explanation}")
+                                # Create regenerate function with captured context
+                                stderr_captured = result.stderr
+                                returncode_captured = result.returncode
+                                def regenerate_fix(prev_suggestion: str, feedback: str) -> Optional[dict]:
+                                    return self.fix_failed_command(
+                                        current_cmd,
+                                        f"{stderr_captured}\nPrevious fix suggestion: {prev_suggestion}\nUser feedback: {feedback}",
+                                        returncode_captured
+                                    )
 
-                                if SKIP_PERMISSIONS:
-                                    print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
-                                    current_cmd = fixed_cmd
-                                    continue  # Re-run with fixed command
-
-                                run_fix = input_no_history("\n\033[1;32mRun fixed command? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
-                                if run_fix in ("y", "yes"):
-                                    current_cmd = fixed_cmd
-                                    continue  # Re-run with fixed command
-                                elif run_fix in ("e", "edit"):
-                                    edited = input_no_history("\033[1;34mEdit command:\033[0m ").strip()
-                                    if edited:
-                                        current_cmd = edited
-                                        continue  # Re-run with edited command
-                                elif run_fix in ("f", "feedback"):
-                                    feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
-                                    if feedback:
-                                        # Re-generate fix with feedback
-                                        print("\033[2m(analyzing error...)\033[0m")
-                                        fix_result = self.fix_failed_command(
-                                            current_cmd,
-                                            f"{result.stderr}\nPrevious fix suggestion: {fixed_cmd}\nUser feedback: {feedback}",
-                                            result.returncode
-                                        )
-                                        if fix_result and fix_result.get("fixed_command"):
-                                            fixed_cmd = fix_result["fixed_command"]
-                                            explanation = fix_result.get("explanation", "")
-                                            print(f"\n\033[1;36mSuggested fix:\033[0m {fixed_cmd}")
-                                            print(f"\033[1;33mExplanation:\033[0m {explanation}")
-                                            continue  # Loop back for confirmation
+                                approved_cmd = confirm_suggested_command(
+                                    initial_cmd=fixed_cmd,
+                                    initial_explanation=explanation,
+                                    action_label="Suggested fix",
+                                    explanation_label="Explanation",
+                                    prompt_text="Run fixed command?",
+                                    regenerate_fn=regenerate_fix,
+                                    thinking_message="(analyzing error...)",
+                                )
+                                if approved_cmd:
+                                    current_cmd = approved_cmd
+                                    continue  # Re-run with fixed/edited command
                                 break
                         continue
                     elif response in ("n", "no"):
