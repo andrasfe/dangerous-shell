@@ -389,6 +389,18 @@ def upload_file(
     if not REMOTE_AVAILABLE or _remote_client is None:
         return "Error: Remote client not available"
 
+    # Confirm before upload
+    print(f"\n\033[1;36mUpload:\033[0m {local_path} -> {remote_path}")
+    if not SKIP_PERMISSIONS:
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        if response in ("e", "edit"):
+            new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
+            new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
+            local_path = new_local if new_local else local_path
+            remote_path = new_remote if new_remote else remote_path
+        elif response not in ("y", "yes"):
+            return "Upload cancelled by user."
+
     async def _upload():
         async with RemoteClient(
             host="127.0.0.1",
@@ -432,6 +444,18 @@ def download_file(
 
     if not REMOTE_AVAILABLE or _remote_client is None:
         return "Error: Remote client not available"
+
+    # Confirm before download
+    print(f"\n\033[1;36mDownload:\033[0m {remote_path} -> {local_path}")
+    if not SKIP_PERMISSIONS:
+        response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+        if response in ("e", "edit"):
+            new_remote = input(f"\033[1;34mRemote path [{remote_path}]:\033[0m ").strip()
+            new_local = input(f"\033[1;34mLocal path [{local_path}]:\033[0m ").strip()
+            remote_path = new_remote if new_remote else remote_path
+            local_path = new_local if new_local else local_path
+        elif response not in ("y", "yes"):
+            return "Download cancelled by user."
 
     async def _download():
         async with RemoteClient(
