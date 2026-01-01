@@ -617,7 +617,7 @@ def run_shell_command(
             else:
                 fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
-                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
+                return f"Execution FAILED (exit code {returncode}). User declined fix - do not suggest another command, wait for next user input.\n" + "\n".join(output_parts)
 
             print("\033[2m(analyzing error...)\033[0m")
             fix_result = fix_failed_command_standalone(current_cmd, stderr, returncode)
