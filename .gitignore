@@ -2,6 +2,9 @@
 .env
 .env.local
 !.env.example
+*.key
+*_private.key
+*_public.key
 
 # Python
 __pycache__/
