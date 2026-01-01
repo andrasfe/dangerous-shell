@@ -2,8 +2,13 @@
 """
 nlsh-remote - Remote execution server for Natural Language Shell.
 
-Accepts WebSocket connections from nlsh clients, verifies HMAC signatures,
+Accepts WebSocket connections from nlsh-mcp servers, verifies Ed25519 signatures,
 and executes commands on the local system.
+
+Security Model (Chain of Trust):
+- nlsh signs messages with nlsh_private -> nlsh_mcp verifies with nlsh_public
+- nlsh_mcp re-signs with mcp_private -> nlsh_remote verifies with mcp_public
+- Responses are sent over the trusted SSH tunnel (not cryptographically signed)
 
 Security: Use SSH tunnel for secure access (recommended over SSL).
 """
@@ -14,7 +19,7 @@ import json
 import asyncio
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
@@ -22,7 +27,15 @@ import uvicorn
 
 # Add shared package to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from shared.crypto import sign_message, verify_message
+
+# Try to import asymmetric crypto first (new), fall back to HMAC (legacy)
+try:
+    from shared.asymmetric_crypto import verify_message, load_public_key, KeyLoadError
+    USE_ASYMMETRIC = True
+except ImportError:
+    from shared.crypto import verify_message
+    USE_ASYMMETRIC = False
+
 from shared.protocol import (
     MessageType,
     CommandRequest, CommandResponse,
@@ -35,10 +48,21 @@ from shared.protocol import (
 load_dotenv()
 
 # Configuration
-SHARED_SECRET = os.getenv("NLSH_SHARED_SECRET", "")
 HOST = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")  # localhost by default (use SSH tunnel)
 PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
 SHELL_EXECUTABLE = os.getenv("NLSH_SHELL", os.getenv("SHELL", "/bin/bash"))
+
+# Security configuration
+if USE_ASYMMETRIC:
+    # Ed25519 mode: verify with MCP server's public key
+    MCP_PUBLIC_KEY_PATH = os.getenv("NLSH_MCP_PUBLIC_KEY_PATH", "")
+    MCP_PUBLIC_KEY = None
+    SHARED_SECRET = None  # Not used in asymmetric mode
+else:
+    # Legacy HMAC mode: use shared secret
+    SHARED_SECRET = os.getenv("NLSH_SHARED_SECRET", "")
+    MCP_PUBLIC_KEY_PATH = None
+    MCP_PUBLIC_KEY = None
 
 # Create FastAPI app
 app = FastAPI(
@@ -47,13 +71,31 @@ app = FastAPI(
 )
 
 
-def send_error(error: str, code: str = "ERROR") -> dict[str, Any]:
-    """Create a signed error response."""
+def send_response(msg_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a response message.
+
+    In asymmetric mode, responses are not cryptographically signed
+    (trusting the SSH tunnel). In legacy mode, responses are HMAC signed.
+    """
+    if USE_ASYMMETRIC:
+        # Asymmetric mode: send unsigned response over trusted connection
+        return {
+            "type": msg_type,
+            "payload": payload,
+        }
+    else:
+        # Legacy HMAC mode: sign response
+        from shared.crypto import sign_message
+        return sign_message(SHARED_SECRET, msg_type, payload)
+
+
+def send_error(error: str, code: str = "ERROR") -> Dict[str, Any]:
+    """Create an error response."""
     response = ErrorResponse(error=error, code=code)
-    return sign_message(SHARED_SECRET, MessageType.ERROR, response.to_payload())
+    return send_response(MessageType.ERROR, response.to_payload())
 
 
-async def handle_command(payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Handle command execution request."""
     try:
         request = CommandRequest.from_payload(payload)
@@ -84,7 +126,7 @@ async def handle_command(payload: dict[str, Any]) -> dict[str, Any]:
             returncode=result.returncode,
             success=(result.returncode == 0)
         )
-        return sign_message(SHARED_SECRET, MessageType.RESPONSE, response.to_payload())
+        return send_response(MessageType.RESPONSE, response.to_payload())
 
     except subprocess.TimeoutExpired:
         return send_error(f"Command timed out after {request.timeout}s", "TIMEOUT")
@@ -92,7 +134,7 @@ async def handle_command(payload: dict[str, Any]) -> dict[str, Any]:
         return send_error(f"Command execution failed: {e}", "EXEC_ERROR")
 
 
-async def handle_upload(payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_upload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Handle file upload request."""
     try:
         request = UploadRequest.from_payload(payload)
@@ -120,7 +162,7 @@ async def handle_upload(payload: dict[str, Any]) -> dict[str, Any]:
             message=f"File written to {remote_path}",
             bytes_written=len(request.data)
         )
-        return sign_message(SHARED_SECRET, MessageType.RESPONSE, response.to_payload())
+        return send_response(MessageType.RESPONSE, response.to_payload())
 
     except PermissionError:
         return send_error(f"Permission denied: {request.remote_path}", "PERMISSION_DENIED")
@@ -128,7 +170,7 @@ async def handle_upload(payload: dict[str, Any]) -> dict[str, Any]:
         return send_error(f"Upload failed: {e}", "UPLOAD_ERROR")
 
 
-async def handle_download(payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_download(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Handle file download request."""
     try:
         request = DownloadRequest.from_payload(payload)
@@ -154,7 +196,7 @@ async def handle_download(payload: dict[str, Any]) -> dict[str, Any]:
             size=len(data),
             message=f"Downloaded {len(data)} bytes"
         )
-        return sign_message(SHARED_SECRET, MessageType.RESPONSE, response.to_payload())
+        return send_response(MessageType.RESPONSE, response.to_payload())
 
     except PermissionError:
         return send_error(f"Permission denied: {request.remote_path}", "PERMISSION_DENIED")
@@ -162,9 +204,9 @@ async def handle_download(payload: dict[str, Any]) -> dict[str, Any]:
         return send_error(f"Download failed: {e}", "DOWNLOAD_ERROR")
 
 
-async def handle_ping() -> dict[str, Any]:
+async def handle_ping() -> Dict[str, Any]:
     """Handle ping request."""
-    return sign_message(SHARED_SECRET, MessageType.PONG, {"status": "ok"})
+    return send_response(MessageType.PONG, {"status": "ok"})
 
 
 @app.websocket("/ws")
@@ -187,7 +229,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             # Verify signature
-            is_valid, error = verify_message(SHARED_SECRET, message)
+            if USE_ASYMMETRIC:
+                # Ed25519 verification with MCP public key
+                is_valid, error = verify_message(MCP_PUBLIC_KEY, message)
+            else:
+                # Legacy HMAC verification
+                is_valid, error = verify_message(SHARED_SECRET, message)
+
             if not is_valid:
                 print(f"[-] Auth failed from {client_info}: {error}")
                 await websocket.send_text(json.dumps(
@@ -229,18 +277,41 @@ async def health_check():
 
 def main():
     """Run the server."""
-    if not SHARED_SECRET:
-        print("ERROR: NLSH_SHARED_SECRET not set in environment")
-        print("Please set it in your .env file")
-        sys.exit(1)
+    global MCP_PUBLIC_KEY
+
+    if USE_ASYMMETRIC:
+        # Ed25519 mode: load MCP public key
+        if not MCP_PUBLIC_KEY_PATH:
+            print("ERROR: NLSH_MCP_PUBLIC_KEY_PATH not set in environment")
+            print("This should point to the MCP server's Ed25519 public key.")
+            print("Generate keys on the MCP server with: python -m shared.keygen mcp")
+            print("Then copy mcp_public.key to this machine.")
+            sys.exit(1)
+
+        try:
+            MCP_PUBLIC_KEY = load_public_key(MCP_PUBLIC_KEY_PATH)
+            print(f"Loaded MCP public key from: {MCP_PUBLIC_KEY_PATH}")
+        except KeyLoadError as e:
+            print(f"ERROR: Failed to load MCP public key: {e}")
+            sys.exit(1)
+
+        security_mode = "Ed25519 asymmetric"
+    else:
+        # Legacy HMAC mode
+        if not SHARED_SECRET:
+            print("ERROR: NLSH_SHARED_SECRET not set in environment")
+            print("Please set it in your .env file")
+            sys.exit(1)
+        security_mode = "HMAC-SHA256 (legacy)"
 
     print(f"Starting nlsh-remote server...")
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
     print(f"  Shell: {SHELL_EXECUTABLE}")
+    print(f"  Security: {security_mode}")
     print(f"  WebSocket: ws://{HOST}:{PORT}/ws")
     if HOST == "127.0.0.1":
-        print(f"  Security: localhost only (use SSH tunnel)")
+        print(f"  Network: localhost only (use SSH tunnel)")
     print()
 
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

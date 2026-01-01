@@ -1,0 +1,16 @@
+# nlsh-mcp server dependencies
+
+# MCP framework
+mcp>=1.0.0
+
+# Async WebSocket client
+websockets>=12.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Pydantic for data validation
+pydantic>=2.0.0
+
+# Ed25519 cryptography
+pynacl>=1.5.0
