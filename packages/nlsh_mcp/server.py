@@ -57,7 +57,6 @@ def create_server() -> FastMCP:
     # Initialize FastMCP server
     mcp = FastMCP(
         name=config.server_name,
-        version=config.server_version,
     )
 
     # Register tools with proper annotations
