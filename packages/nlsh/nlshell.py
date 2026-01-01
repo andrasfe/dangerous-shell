@@ -904,6 +904,9 @@ def run_shell_command(
                     if next_cmd:
                         current_cmd = next_cmd
                         continue  # Run the suggested/edited command
+                    else:
+                        # User declined - skip LLM follow-up response
+                        shell_state.skip_llm_response = True
 
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
