@@ -522,7 +522,7 @@ async with RemoteClient(
 
 - **SSH tunnel**: All traffic is encrypted via SSH
 - **Localhost binding**: Server only accepts connections from localhost
-- **HMAC-SHA256 signing**: Messages are signed as additional integrity check
+- **Ed25519 signatures**: Chain-of-trust authentication (nlsh -> nlsh_mcp -> nlsh_remote)
 - **Timestamp validation**: Messages expire after 5 minutes to prevent replay attacks
 
 ## Project Structure
@@ -535,13 +535,18 @@ packages/
 │   ├── remote_client.py   # Remote execution client
 │   ├── requirements.txt
 │   └── .env.example
+├── nlsh_mcp/          # MCP server for remote execution
+│   ├── server.py          # FastMCP server
+│   ├── client.py          # Connection manager
+│   └── tools.py           # MCP tool implementations
 ├── nlsh_remote/       # Remote execution server
 │   ├── server.py          # FastAPI WebSocket server
 │   ├── requirements.txt
 │   └── .env.example
 └── shared/            # Shared code between packages
-    ├── crypto.py          # HMAC signing/verification
-    └── protocol.py        # Message types and serialization
+    ├── asymmetric_crypto.py  # Ed25519 signing/verification
+    ├── crypto.py             # HMAC signing (legacy)
+    └── protocol.py           # Message types and serialization
 ```
 
 ## Files
