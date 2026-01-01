@@ -5,13 +5,14 @@ import sys
 import json
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import websockets
+from nacl.signing import SigningKey
 
 # Add shared package to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from shared.crypto import sign_message, verify_message
+from shared.asymmetric_crypto import sign_message, load_private_key
 from shared.protocol import (
     MessageType,
     CommandRequest, CommandResponse,
@@ -28,7 +29,7 @@ class RemoteClient:
         self,
         host: str,
         port: int,
-        shared_secret: str,
+        private_key: SigningKey,
         timeout: float = 30.0
     ):
         """Initialize remote client.
@@ -36,12 +37,12 @@ class RemoteClient:
         Args:
             host: Server hostname/IP (usually localhost via SSH tunnel)
             port: Server port
-            shared_secret: Shared secret for HMAC authentication
+            private_key: Ed25519 signing key for authentication
             timeout: Connection timeout in seconds
         """
         self.host = host
         self.port = port
-        self.shared_secret = shared_secret
+        self.private_key = private_key
         self.timeout = timeout
         self.ws_url = f"ws://{host}:{port}/ws"
         self._websocket = None
@@ -77,13 +78,8 @@ class RemoteClient:
         )
         response = json.loads(response_text)
 
-        # Verify response signature if present (legacy HMAC mode)
         # In asymmetric mode, server sends unsigned responses over trusted SSH tunnel
-        if "signature" in response:
-            is_valid, error = verify_message(self.shared_secret, response)
-            if not is_valid:
-                raise ValueError(f"Invalid response signature: {error}")
-
+        # No signature verification needed - trust is established via SSH tunnel
         return response
 
     async def execute_command(
@@ -95,7 +91,7 @@ class RemoteClient:
         """Execute a command on the remote server."""
         request = CommandRequest(command=command, cwd=cwd, timeout=timeout)
         message = sign_message(
-            self.shared_secret,
+            self.private_key,
             MessageType.COMMAND,
             request.to_payload()
         )
@@ -124,7 +120,7 @@ class RemoteClient:
         data = local_path.read_bytes()
         request = UploadRequest(remote_path=remote_path, data=data, mode=mode)
         message = sign_message(
-            self.shared_secret,
+            self.private_key,
             MessageType.UPLOAD,
             request.to_payload()
         )
@@ -145,7 +141,7 @@ class RemoteClient:
         """Download a file from the remote server."""
         request = DownloadRequest(remote_path=remote_path)
         message = sign_message(
-            self.shared_secret,
+            self.private_key,
             MessageType.DOWNLOAD,
             request.to_payload()
         )
@@ -167,7 +163,7 @@ class RemoteClient:
 
     async def ping(self) -> bool:
         """Send a ping to check connection."""
-        message = sign_message(self.shared_secret, MessageType.PING, {"status": "ping"})
+        message = sign_message(self.private_key, MessageType.PING, {"status": "ping"})
         response = await self._send_and_receive(message)
         return response["type"] == MessageType.PONG
 

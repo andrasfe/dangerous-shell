@@ -59,7 +59,8 @@ HISTORY_CONTEXT_SIZE = 20
 
 # Remote execution configuration (use SSH tunnel for security)
 REMOTE_PORT = int(os.getenv("NLSH_REMOTE_PORT", "8765"))
-REMOTE_SECRET = os.getenv("NLSH_SHARED_SECRET")
+REMOTE_PRIVATE_KEY_PATH = os.getenv("NLSH_PRIVATE_KEY_PATH", "")
+REMOTE_PRIVATE_KEY = None  # Loaded at startup if --remote is used
 
 # Audio settings
 AUDIO_SAMPLE_RATE = 16000  # 16kHz for speech recognition
@@ -555,7 +556,7 @@ def upload_file(
         async with RemoteClient(
             host="127.0.0.1",
             port=REMOTE_PORT,
-            shared_secret=REMOTE_SECRET
+            private_key=REMOTE_PRIVATE_KEY
         ) as client:
             result = await client.upload_file(local_path, remote_path, mode)
             return result
@@ -616,7 +617,7 @@ def download_file(
         async with RemoteClient(
             host="127.0.0.1",
             port=REMOTE_PORT,
-            shared_secret=REMOTE_SECRET
+            private_key=REMOTE_PRIVATE_KEY
         ) as client:
             data, result = await client.download_file(remote_path, local_path)
             return result
@@ -652,7 +653,7 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
         async with RemoteClient(
             host="127.0.0.1",  # Always localhost (through SSH tunnel)
             port=REMOTE_PORT,
-            shared_secret=REMOTE_SECRET
+            private_key=REMOTE_PRIVATE_KEY
         ) as client:
             result = await client.execute_command(command, cwd=cwd)
             return result.success, result.stdout, result.stderr, result.returncode
@@ -1684,11 +1685,26 @@ def main():
         print()
 
     if args.remote:
+        global REMOTE_PRIVATE_KEY
+
         if not REMOTE_AVAILABLE:
             print("\033[1;31mError: Remote execution not available. Check remote_client.py import.\033[0m")
             sys.exit(1)
-        if not REMOTE_SECRET:
-            print("\033[1;31mError: NLSH_SHARED_SECRET not set in .env\033[0m")
+        if not REMOTE_PRIVATE_KEY_PATH:
+            print("\033[1;31mError: NLSH_PRIVATE_KEY_PATH not set in .env\033[0m")
+            sys.exit(1)
+
+        # Load private key for Ed25519 authentication
+        from shared.asymmetric_crypto import load_private_key
+        key_path = Path(REMOTE_PRIVATE_KEY_PATH).expanduser()
+        if not key_path.exists():
+            print(f"\033[1;31mError: Private key not found: {key_path}\033[0m")
+            print("\033[1;33mRun: python packages/shared/keygen.py all\033[0m")
+            sys.exit(1)
+        try:
+            REMOTE_PRIVATE_KEY = load_private_key(str(key_path))
+        except Exception as e:
+            print(f"\033[1;31mError loading private key: {e}\033[0m")
             sys.exit(1)
 
         REMOTE_MODE = True
