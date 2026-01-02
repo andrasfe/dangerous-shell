@@ -3,6 +3,9 @@
 Stores command embeddings locally and provides semantic search
 to find similar cached commands. Works with the remote command store
 to enable cache-based command execution.
+
+The cache embeds USER REQUESTS (not LLM explanations) so that similar
+requests can skip the LLM entirely and use cached commands.
 """
 
 import sqlite3
@@ -26,30 +29,33 @@ class CachedCommand:
     """A cached command with its embedding."""
     key: str  # UUID
     command: str
-    description: str
-    embedding: np.ndarray
+    explanation: str  # LLM's explanation (for display)
+    user_request: str  # Original user request (for reference)
+    embedding: np.ndarray  # Embedding of user_request
     created_at: datetime
     last_used: datetime
     use_count: int = 1
 
 
 @dataclass
-class CacheSearchResult:
-    """Result of a cache search."""
-    cached: CachedCommand
+class CacheHit:
+    """Result of a successful cache lookup."""
+    key: str
+    command: str
+    explanation: str
     similarity: float
 
 
 class CommandCache:
     """SQLite-backed semantic command cache.
 
-    Stores commands with their embeddings for semantic search.
-    Uses cosine similarity to find similar cached commands.
+    Stores commands with embeddings of USER REQUESTS for semantic search.
+    This allows similar requests to skip the LLM entirely.
     """
 
     # Similarity thresholds
     EXACT_MATCH_THRESHOLD = 0.99  # Above this, no LLM validation needed
-    SIMILARITY_THRESHOLD = 0.85   # Below this, create new entry
+    SIMILARITY_THRESHOLD = 0.85   # Below this, treat as cache miss
 
     def __init__(
         self,
@@ -60,7 +66,7 @@ class CommandCache:
 
         Args:
             db_path: Path to SQLite database. Defaults to ~/.nlsh/cache/commands.db
-            llm_validator: Function(natural_request, cached_command, cached_description) -> bool
+            llm_validator: Function(natural_request, cached_command, cached_explanation) -> bool
                           Called for similarity matches between SIMILARITY_THRESHOLD and
                           EXACT_MATCH_THRESHOLD to validate if cached command is appropriate.
         """
@@ -79,7 +85,8 @@ class CommandCache:
             CREATE TABLE IF NOT EXISTS commands (
                 key TEXT PRIMARY KEY,
                 command TEXT NOT NULL,
-                description TEXT NOT NULL,
+                explanation TEXT NOT NULL,
+                user_request TEXT NOT NULL,
                 embedding BLOB NOT NULL,
                 embedding_dim INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
@@ -110,100 +117,119 @@ class CommandCache:
         """Set the LLM validator function.
 
         Args:
-            validator: Function(natural_request, cached_command, cached_description) -> bool
+            validator: Function(natural_request, cached_command, cached_explanation) -> bool
         """
         self._llm_validator = validator
 
-    def search(self, embedding: np.ndarray, threshold: float | None = None) -> Optional[CacheSearchResult]:
-        """Search for similar cached commands.
+    def lookup(self, user_request: str) -> Optional[CacheHit]:
+        """Look up a cached command by user request.
+
+        This should be called BEFORE the LLM to potentially skip it entirely.
 
         Args:
-            embedding: Query embedding vector.
-            threshold: Minimum similarity threshold. Defaults to SIMILARITY_THRESHOLD.
+            user_request: The user's natural language request.
 
         Returns:
-            Best matching result above threshold, or None.
+            CacheHit with command and explanation if found, None otherwise.
         """
-        if threshold is None:
-            threshold = self.SIMILARITY_THRESHOLD
+        try:
+            # Get embedding for user request
+            client = get_embedding_client()
+            embedding = client.get_embedding(user_request)
 
-        conn = self._get_conn()
-        cursor = conn.execute(
-            "SELECT key, command, description, embedding, embedding_dim, "
-            "created_at, last_used, use_count FROM commands"
-        )
+            # Search for similar cached requests
+            conn = self._get_conn()
+            cursor = conn.execute(
+                "SELECT key, command, explanation, user_request, embedding, embedding_dim "
+                "FROM commands"
+            )
 
-        best_match: Optional[CacheSearchResult] = None
-        best_similarity = threshold
+            best_match: Optional[tuple] = None
+            best_similarity = self.SIMILARITY_THRESHOLD
 
-        for row in cursor:
-            cached_embedding = self._bytes_to_embedding(row[3], row[4])
-            similarity = cosine_similarity(embedding, cached_embedding)
+            for row in cursor:
+                cached_embedding = self._bytes_to_embedding(row[4], row[5])
+                similarity = cosine_similarity(embedding, cached_embedding)
 
-            if similarity > best_similarity:
-                cached = CachedCommand(
-                    key=row[0],
-                    command=row[1],
-                    description=row[2],
-                    embedding=cached_embedding,
-                    created_at=datetime.fromisoformat(row[5]),
-                    last_used=datetime.fromisoformat(row[6]),
-                    use_count=row[7],
-                )
-                best_match = CacheSearchResult(cached=cached, similarity=similarity)
-                best_similarity = similarity
+                if similarity > best_similarity:
+                    best_match = (row[0], row[1], row[2], row[3], similarity)
+                    best_similarity = similarity
 
-        return best_match
+            if not best_match:
+                return None
+
+            key, command, explanation, cached_request, similarity = best_match
+
+            # Exact match - no validation needed
+            if similarity >= self.EXACT_MATCH_THRESHOLD:
+                self._update_usage(key)
+                return CacheHit(key=key, command=command, explanation=explanation, similarity=similarity)
+
+            # Similar but not exact - validate with LLM if validator is set
+            if self._llm_validator:
+                is_valid = self._llm_validator(user_request, command, explanation)
+                if is_valid:
+                    self._update_usage(key)
+                    return CacheHit(key=key, command=command, explanation=explanation, similarity=similarity)
+
+            # Validation failed or no validator
+            return None
+
+        except EmbeddingError as e:
+            # Embedding API failed - treat as cache miss
+            print(f"\033[2m(cache: embedding unavailable)\033[0m")
+            return None
 
     def store(
         self,
-        key: str,
         command: str,
-        description: str,
-        embedding: np.ndarray
-    ) -> CachedCommand:
+        explanation: str,
+        user_request: str,
+    ) -> str:
         """Store a new command in the cache.
 
+        This should be called AFTER the LLM generates a command.
+
         Args:
-            key: UUID key.
-            command: Shell command.
-            description: Natural language description.
-            embedding: Embedding vector.
+            command: Shell command to cache.
+            explanation: LLM's explanation (for display on cache hit).
+            user_request: Original user request (embedding source).
 
         Returns:
-            The stored CachedCommand.
+            UUID key for the stored command.
         """
-        conn = self._get_conn()
-        now = datetime.now()
+        try:
+            client = get_embedding_client()
+            embedding = client.get_embedding(user_request)
 
-        conn.execute(
-            "INSERT OR REPLACE INTO commands "
-            "(key, command, description, embedding, embedding_dim, created_at, last_used, use_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                key,
-                command,
-                description,
-                self._embedding_to_bytes(embedding),
-                len(embedding),
-                now.isoformat(),
-                now.isoformat(),
-                1,
+            key = str(uuid.uuid4())
+            conn = self._get_conn()
+            now = datetime.now()
+
+            conn.execute(
+                "INSERT OR REPLACE INTO commands "
+                "(key, command, explanation, user_request, embedding, embedding_dim, "
+                "created_at, last_used, use_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    key,
+                    command,
+                    explanation,
+                    user_request,
+                    self._embedding_to_bytes(embedding),
+                    len(embedding),
+                    now.isoformat(),
+                    now.isoformat(),
+                    1,
+                )
             )
-        )
-        conn.commit()
+            conn.commit()
+            return key
 
-        return CachedCommand(
-            key=key,
-            command=command,
-            description=description,
-            embedding=embedding,
-            created_at=now,
-            last_used=now,
-            use_count=1,
-        )
+        except EmbeddingError:
+            # Embedding failed - return a key anyway for remote execution
+            return str(uuid.uuid4())
 
-    def update_usage(self, key: str):
+    def _update_usage(self, key: str):
         """Update usage statistics for a cached command."""
         conn = self._get_conn()
         now = datetime.now().isoformat()
@@ -213,66 +239,15 @@ class CommandCache:
         )
         conn.commit()
 
-    def get_or_create_key(
-        self,
-        command: str,
-        description: str,
-        natural_request: str,
-    ) -> tuple[str, bool]:
-        """Get existing cache key or create a new one.
-
-        This is the main entry point for the cache. It:
-        1. Embeds the description
-        2. Searches for similar cached commands
-        3. For exact matches (>0.99): returns cached key
-        4. For similar matches (0.85-0.99): validates with LLM
-        5. For misses (<0.85) or failed validation: creates new entry
-
-        Args:
-            command: The shell command to cache.
-            description: Natural language description (from LLM explanation).
-            natural_request: Original user request (for LLM validation).
-
-        Returns:
-            Tuple of (key, is_cached) where:
-            - key: UUID for this command
-            - is_cached: True if this was a cache hit (key already exists on remote)
-        """
-        try:
-            # Get embedding for description
-            client = get_embedding_client()
-            embedding = client.get_embedding(description)
-
-            # Search cache
-            result = self.search(embedding)
-
-            if result:
-                # Check if exact match
-                if result.similarity >= self.EXACT_MATCH_THRESHOLD:
-                    self.update_usage(result.cached.key)
-                    return result.cached.key, True
-
-                # Similar but not exact - validate with LLM
-                if self._llm_validator:
-                    is_valid = self._llm_validator(
-                        natural_request,
-                        result.cached.command,
-                        result.cached.description
-                    )
-                    if is_valid:
-                        self.update_usage(result.cached.key)
-                        return result.cached.key, True
-                    # LLM said cached command is not appropriate - fall through to create new
-
-            # No match or validation failed - create new entry
-            key = str(uuid.uuid4())
-            self.store(key, command, description, embedding)
-            return key, False
-
-        except EmbeddingError as e:
-            # Embedding API failed - create new key without caching
-            print(f"\033[1;33mWarning: Cache unavailable ({e})\033[0m")
-            return str(uuid.uuid4()), False
+    def get_key_for_command(self, command: str) -> Optional[str]:
+        """Get the cache key for a specific command if it exists."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT key FROM commands WHERE command = ?",
+            (command,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
 
     def count(self) -> int:
         """Get total number of cached commands."""
@@ -281,14 +256,7 @@ class CommandCache:
         return cursor.fetchone()[0]
 
     def cleanup_old(self, days: int = 30) -> int:
-        """Remove entries not used in the specified number of days.
-
-        Args:
-            days: Number of days of inactivity before cleanup.
-
-        Returns:
-            Number of entries removed.
-        """
+        """Remove entries not used in the specified number of days."""
         from datetime import timedelta
 
         conn = self._get_conn()

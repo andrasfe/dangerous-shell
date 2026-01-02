@@ -41,7 +41,7 @@ except ImportError:
 
 # Command cache import (for semantic command caching)
 try:
-    from command_cache import get_command_cache, CommandCache
+    from command_cache import get_command_cache, CacheHit
     CACHE_AVAILABLE = True
 except ImportError:
     CACHE_AVAILABLE = False
@@ -766,73 +766,6 @@ Answer with ONLY "yes" or "no"."""
         return False
 
 
-def execute_remote_command_cached(
-    command: str,
-    explanation: str,
-    natural_request: str,
-    cwd: str | None = None
-) -> tuple[bool, str, str, int]:
-    """Execute a remote command using the semantic cache.
-
-    This function:
-    1. Gets or creates a cache key based on the command explanation
-    2. Sends the key to remote for lookup
-    3. If cache hit on remote: executes the cached command
-    4. If cache miss: sends key + command, remote stores and executes
-
-    Args:
-        command: The command to execute
-        explanation: LLM's explanation of what the command does (used for embedding)
-        natural_request: The user's original request
-        cwd: Working directory (optional)
-
-    Returns:
-        Tuple of (success, stdout, stderr, returncode)
-    """
-    if not REMOTE_AVAILABLE or _remote_client is None:
-        return False, "", "Remote client not available", -1
-
-    if not CACHE_AVAILABLE:
-        # Fall back to regular execution
-        return execute_remote_command(command, cwd)
-
-    async def _run_cached():
-        # Get or create cache key
-        cache = get_command_cache()
-
-        # Set up LLM validator if not already done
-        if cache._llm_validator is None:
-            cache.set_llm_validator(validate_cached_command)
-
-        key, is_cached = cache.get_or_create_key(command, explanation, natural_request)
-
-        async with RemoteClient(
-            host="127.0.0.1",
-            port=REMOTE_PORT,
-            private_key=REMOTE_PRIVATE_KEY
-        ) as client:
-            if is_cached:
-                # Try cache lookup on remote
-                lookup_result = await client.cache_lookup(key)
-                if lookup_result.hit:
-                    # Remote has the command, execute it
-                    print(f"\033[2m⚡ cached\033[0m")
-                    result = await client.execute_command(lookup_result.command, cwd=cwd)
-                    return result.success, result.stdout, result.stderr, result.returncode
-                # Remote doesn't have it - fall through to store and execute
-
-            # Store and execute (new entry or cache miss on remote)
-            result = await client.cache_store_and_execute(key, command, cwd=cwd)
-            return result.success, result.stdout, result.stderr, result.returncode
-
-    try:
-        return asyncio.run(_run_cached())
-    except Exception as e:
-        # On any cache error, fall back to regular execution
-        print(f"\033[1;33mCache error, falling back to direct execution: {e}\033[0m")
-        return execute_remote_command(command, cwd)
-
-
 def requires_interactive_mode(command: str) -> bool:
     """Check if a command might require password input and should run interactively."""
     cmd_lower = command.lower().strip()
@@ -979,10 +912,8 @@ def run_shell_command(
         try:
             # Execute locally or remotely based on mode
             if REMOTE_MODE:
-                success, stdout, stderr, returncode = execute_remote_command_cached(
+                success, stdout, stderr, returncode = execute_remote_command(
                     current_cmd,
-                    explanation,  # For semantic caching
-                    natural_request,  # For LLM validation
                     cwd=_remote_cwd  # Use remote cwd, not local
                 )
             else:
@@ -1015,6 +946,14 @@ def run_shell_command(
                 log_command(natural_request, current_cmd, True)
                 shell_state.last_command = current_cmd
                 shell_state.last_output = stdout
+
+                # Store in cache for future use (remote mode only)
+                if REMOTE_MODE and CACHE_AVAILABLE and natural_request:
+                    try:
+                        cache = get_command_cache()
+                        cache.store(current_cmd, explanation, natural_request)
+                    except Exception:
+                        pass  # Cache storage is best-effort
 
                 # Check for suggested next command
                 full_output = stdout or ""
@@ -1550,8 +1489,71 @@ Respond conversationally. Be concise but helpful."""
         except Exception as e:
             print(f"\n\033[1;31mError: {e}\033[0m")
 
+    def _execute_cached_command(self, cache_hit: "CacheHit", user_input: str) -> bool:
+        """Execute a cached command (skipping LLM).
+
+        Args:
+            cache_hit: The cache hit with command and explanation.
+            user_input: Original user request (for logging).
+
+        Returns:
+            True if command was executed, False if user cancelled.
+        """
+        global _remote_cwd
+
+        # Show the cached command
+        print(f"\033[2m⚡ cached\033[0m")
+        print(f"\n\033[1;33mCommand:\033[0m {cache_hit.command}")
+        print(f"\033[2mExplanation: {cache_hit.explanation}\033[0m")
+
+        # Ask for confirmation
+        if SKIP_PERMISSIONS:
+            response = "y"
+            print(f"\033[2m(auto-executing: --dangerously-skip-permissions)\033[0m")
+        else:
+            response = input_no_history("\n\033[1;32mExecute? [y/n/e(dit)]:\033[0m ").strip().lower()
+
+        if response in ("n", "no"):
+            print("\033[2mCancelled.\033[0m")
+            return False
+
+        command = cache_hit.command
+        if response in ("e", "edit"):
+            edited = input_no_history(f"\033[1;33mEdit command:\033[0m {command}\r\033[1;33mEdit command:\033[0m ")
+            if edited.strip():
+                command = edited.strip()
+
+        # Execute the command
+        print(f"\n\033[2mExecuting on remote...\033[0m")
+        success, stdout, stderr, returncode = execute_remote_command(command, cwd=_remote_cwd)
+
+        # Show output
+        if stdout:
+            print(stdout, end="")
+        if stderr:
+            print(f"\033[1;31m{stderr}\033[0m", end="")
+
+        if returncode == 0 and not has_stderr_errors(stderr):
+            print(f"\033[1;32m✓ Command completed successfully\033[0m")
+            log_command(user_input, command, True)
+        else:
+            print(f"\033[1;31m✗ Command failed with exit code {returncode}\033[0m")
+            log_command(user_input, command, False)
+
+        return True
+
     def process_input(self, user_input: str):
         """Process user input through the agent."""
+        # Check cache FIRST in remote mode to potentially skip LLM
+        if REMOTE_MODE and CACHE_AVAILABLE:
+            cache = get_command_cache()
+            cache.set_llm_validator(validate_cached_command)
+            cache_hit = cache.lookup(user_input)
+
+            if cache_hit:
+                self._execute_cached_command(cache_hit, user_input)
+                return
+
         # Save user message to conversation history
         shell_state.add_to_history("user", user_input)
 
