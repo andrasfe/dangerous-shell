@@ -94,6 +94,7 @@ class ShellState:
         self.conversation_history = []  # Track conversation for context
         self.max_history = 20  # Keep last N exchanges
         self.skip_llm_response = False  # Flag to skip LLM after user declines action
+        self.current_request = ""  # Current user request (for cache storage)
 
     def add_to_history(self, role: str, content: str):
         """Add a message to conversation history."""
@@ -948,12 +949,15 @@ def run_shell_command(
                 shell_state.last_output = stdout
 
                 # Store in cache for future use (remote mode only)
-                if REMOTE_MODE and CACHE_AVAILABLE and natural_request:
+                # Use shell_state.current_request as fallback if LLM didn't pass natural_request
+                cache_request = natural_request or shell_state.current_request
+                if REMOTE_MODE and CACHE_AVAILABLE and cache_request:
                     try:
                         cache = get_command_cache()
-                        cache.store(current_cmd, explanation, natural_request)
-                    except Exception:
-                        pass  # Cache storage is best-effort
+                        cache.store(current_cmd, explanation, cache_request)
+                        print(f"\033[2m(cached for future use)\033[0m")
+                    except Exception as e:
+                        print(f"\033[2m(cache store error: {e})\033[0m")
 
                 # Check for suggested next command
                 full_output = stdout or ""
@@ -1544,15 +1548,21 @@ Respond conversationally. Be concise but helpful."""
 
     def process_input(self, user_input: str):
         """Process user input through the agent."""
+        # Store current request for cache storage (used by run_shell_command)
+        shell_state.current_request = user_input
+
         # Check cache FIRST in remote mode to potentially skip LLM
         if REMOTE_MODE and CACHE_AVAILABLE:
-            cache = get_command_cache()
-            cache.set_llm_validator(validate_cached_command)
-            cache_hit = cache.lookup(user_input)
+            try:
+                cache = get_command_cache()
+                cache.set_llm_validator(validate_cached_command)
+                cache_hit = cache.lookup(user_input)
 
-            if cache_hit:
-                self._execute_cached_command(cache_hit, user_input)
-                return
+                if cache_hit:
+                    self._execute_cached_command(cache_hit, user_input)
+                    return
+            except Exception as e:
+                print(f"\033[2m(cache error: {e})\033[0m")
 
         # Save user message to conversation history
         shell_state.add_to_history("user", user_input)
