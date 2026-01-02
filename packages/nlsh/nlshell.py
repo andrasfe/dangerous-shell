@@ -1090,6 +1090,8 @@ Error output:
 
 Current directory: {shell_state.cwd}
 
+IMPORTANT: If the error output contains "User feedback:", this is direct input from the user correcting or guiding your fix. You MUST incorporate this feedback into your new suggestion. The user's feedback takes priority over your previous analysis.
+
 Please analyze the error and provide a FIXED version of the command.
 Respond with ONLY a JSON object in this format:
 {{
@@ -1139,7 +1141,9 @@ Command executed: {command}
 Output:
 {output}
 
-If there's a clear, helpful next step based on the output, respond with JSON:
+IMPORTANT: If the output contains "User feedback:", this is direct input from the user correcting or guiding your suggestion. You MUST incorporate this feedback into your new suggestion. The user's feedback takes priority over your previous analysis.
+
+If there's a clear, helpful next step based on the output (and user feedback if present), respond with JSON:
 {{"command": "the next command", "explanation": "why this is the logical next step"}}
 
 Only suggest a command if:
