@@ -18,7 +18,9 @@ from shared.protocol import (
     CommandRequest, CommandResponse,
     UploadRequest, UploadResponse,
     DownloadRequest, DownloadResponse,
-    ErrorResponse
+    ErrorResponse,
+    CacheLookupRequest, CacheLookupResponse,
+    CacheStoreExecRequest,
 )
 
 
@@ -166,6 +168,68 @@ class RemoteClient:
         message = sign_message(self.private_key, MessageType.PING, {"status": "ping"})
         response = await self._send_and_receive(message)
         return response["type"] == MessageType.PONG
+
+    async def cache_lookup(self, key: str) -> CacheLookupResponse:
+        """Look up a cached command by key.
+
+        Args:
+            key: UUID key to look up.
+
+        Returns:
+            CacheLookupResponse with hit/miss status and command if found.
+        """
+        request = CacheLookupRequest(key=key)
+        message = sign_message(
+            self.private_key,
+            MessageType.CACHE_LOOKUP,
+            request.to_payload()
+        )
+
+        response = await self._send_and_receive(message)
+
+        if response["type"] == MessageType.ERROR:
+            error = ErrorResponse.from_payload(response["payload"])
+            raise RuntimeError(f"Cache lookup failed: {error.error} ({error.code})")
+
+        return CacheLookupResponse.from_payload(response["payload"])
+
+    async def cache_store_and_execute(
+        self,
+        key: str,
+        command: str,
+        cwd: str | None = None,
+        timeout: int = 300
+    ) -> CommandResponse:
+        """Store a command in cache and execute it.
+
+        Args:
+            key: UUID key for the command.
+            command: Shell command to store and execute.
+            cwd: Working directory.
+            timeout: Execution timeout in seconds.
+
+        Returns:
+            CommandResponse with execution results.
+        """
+        request = CacheStoreExecRequest(
+            key=key,
+            command=command,
+            cwd=cwd,
+            timeout=timeout
+        )
+        message = sign_message(
+            self.private_key,
+            MessageType.CACHE_STORE_EXEC,
+            request.to_payload()
+        )
+
+        response = await self._send_and_receive(message)
+
+        if response["type"] == MessageType.ERROR:
+            error = ErrorResponse.from_payload(response["payload"])
+            raise RuntimeError(f"Cache store/exec failed: {error.error} ({error.code})")
+
+        return CommandResponse.from_payload(response["payload"])
 
     async def __aenter__(self):
         """Async context manager entry."""

@@ -41,8 +41,11 @@ from shared.protocol import (
     CommandRequest, CommandResponse,
     UploadRequest, UploadResponse,
     DownloadRequest, DownloadResponse,
-    ErrorResponse
+    ErrorResponse,
+    CacheLookupRequest, CacheLookupResponse,
+    CacheStoreExecRequest,
 )
+from command_store import get_command_store
 
 # Load environment variables
 load_dotenv()
@@ -209,6 +212,49 @@ async def handle_ping() -> Dict[str, Any]:
     return send_response(MessageType.PONG, {"status": "ok"})
 
 
+async def handle_cache_lookup(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle cache lookup request."""
+    try:
+        request = CacheLookupRequest.from_payload(payload)
+    except (KeyError, TypeError) as e:
+        return send_error(f"Invalid cache lookup request: {e}", "INVALID_REQUEST")
+
+    store = get_command_store()
+    command = store.get(request.key)
+
+    if command:
+        response = CacheLookupResponse(hit=True, key=request.key, command=command)
+        return send_response(MessageType.CACHE_HIT, response.to_payload())
+    else:
+        response = CacheLookupResponse(hit=False, key=request.key)
+        return send_response(MessageType.CACHE_MISS, response.to_payload())
+
+
+async def handle_cache_store_exec(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle cache store and execute request."""
+    try:
+        request = CacheStoreExecRequest.from_payload(payload)
+    except (KeyError, TypeError) as e:
+        return send_error(f"Invalid cache store request: {e}", "INVALID_REQUEST")
+
+    # Store the command
+    store = get_command_store()
+    stored = store.put(request.key, request.command)
+    if not stored:
+        return send_error(
+            f"Key collision: {request.key} exists with different command",
+            "KEY_COLLISION"
+        )
+
+    # Execute the command (reuse existing handler logic)
+    command_request = CommandRequest(
+        command=request.command,
+        cwd=request.cwd,
+        timeout=request.timeout
+    )
+    return await handle_command(command_request.to_payload())
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for nlsh clients."""
@@ -257,6 +303,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 response = await handle_download(payload)
             elif msg_type == MessageType.PING:
                 response = await handle_ping()
+            elif msg_type == MessageType.CACHE_LOOKUP:
+                response = await handle_cache_lookup(payload)
+            elif msg_type == MessageType.CACHE_STORE_EXEC:
+                response = await handle_cache_store_exec(payload)
             else:
                 response = send_error(f"Unknown message type: {msg_type}", "UNKNOWN_TYPE")
 

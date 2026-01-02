@@ -39,6 +39,13 @@ try:
 except ImportError:
     REMOTE_AVAILABLE = False
 
+# Command cache import (for semantic command caching)
+try:
+    from command_cache import get_command_cache, CommandCache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -725,6 +732,106 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
         return False, "", str(e), -1
 
 
+def validate_cached_command(natural_request: str, cached_command: str, cached_description: str) -> bool:
+    """Use LLM to validate if a cached command is appropriate for the current request.
+
+    Args:
+        natural_request: The user's original request.
+        cached_command: The cached command being considered.
+        cached_description: Description of what the cached command does.
+
+    Returns:
+        True if the cached command is appropriate, False otherwise.
+    """
+    if _llm_instance is None:
+        return False
+
+    prompt = f"""Is this cached command appropriate for the user's current request?
+
+User request: {natural_request}
+Cached command: {cached_command}
+Command description: {cached_description}
+
+Consider:
+- Does the cached command accomplish what the user is asking for?
+- Are there any important differences in context or parameters?
+
+Answer with ONLY "yes" or "no"."""
+
+    try:
+        response = _llm_instance.invoke(prompt)
+        answer = response.content.strip().lower()
+        return answer == "yes"
+    except Exception:
+        return False
+
+
+def execute_remote_command_cached(
+    command: str,
+    explanation: str,
+    natural_request: str,
+    cwd: str | None = None
+) -> tuple[bool, str, str, int]:
+    """Execute a remote command using the semantic cache.
+
+    This function:
+    1. Gets or creates a cache key based on the command explanation
+    2. Sends the key to remote for lookup
+    3. If cache hit on remote: executes the cached command
+    4. If cache miss: sends key + command, remote stores and executes
+
+    Args:
+        command: The command to execute
+        explanation: LLM's explanation of what the command does (used for embedding)
+        natural_request: The user's original request
+        cwd: Working directory (optional)
+
+    Returns:
+        Tuple of (success, stdout, stderr, returncode)
+    """
+    if not REMOTE_AVAILABLE or _remote_client is None:
+        return False, "", "Remote client not available", -1
+
+    if not CACHE_AVAILABLE:
+        # Fall back to regular execution
+        return execute_remote_command(command, cwd)
+
+    async def _run_cached():
+        # Get or create cache key
+        cache = get_command_cache()
+
+        # Set up LLM validator if not already done
+        if cache._llm_validator is None:
+            cache.set_llm_validator(validate_cached_command)
+
+        key, is_cached = cache.get_or_create_key(command, explanation, natural_request)
+
+        async with RemoteClient(
+            host="127.0.0.1",
+            port=REMOTE_PORT,
+            private_key=REMOTE_PRIVATE_KEY
+        ) as client:
+            if is_cached:
+                # Try cache lookup on remote
+                lookup_result = await client.cache_lookup(key)
+                if lookup_result.hit:
+                    # Remote has the command, execute it
+                    result = await client.execute_command(lookup_result.command, cwd=cwd)
+                    return result.success, result.stdout, result.stderr, result.returncode
+                # Remote doesn't have it - fall through to store and execute
+
+            # Store and execute (new entry or cache miss on remote)
+            result = await client.cache_store_and_execute(key, command, cwd=cwd)
+            return result.success, result.stdout, result.stderr, result.returncode
+
+    try:
+        return asyncio.run(_run_cached())
+    except Exception as e:
+        # On any cache error, fall back to regular execution
+        print(f"\033[1;33mCache error, falling back to direct execution: {e}\033[0m")
+        return execute_remote_command(command, cwd)
+
+
 def requires_interactive_mode(command: str) -> bool:
     """Check if a command might require password input and should run interactively."""
     cmd_lower = command.lower().strip()
@@ -871,8 +978,10 @@ def run_shell_command(
         try:
             # Execute locally or remotely based on mode
             if REMOTE_MODE:
-                success, stdout, stderr, returncode = execute_remote_command(
+                success, stdout, stderr, returncode = execute_remote_command_cached(
                     current_cmd,
+                    explanation,  # For semantic caching
+                    natural_request,  # For LLM validation
                     cwd=_remote_cwd  # Use remote cwd, not local
                 )
             else:

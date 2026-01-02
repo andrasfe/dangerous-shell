@@ -15,6 +15,11 @@ class MessageType(str, Enum):
     ERROR = "error"          # Error response
     PING = "ping"            # Keepalive ping
     PONG = "pong"            # Keepalive pong
+    # Cache-related messages
+    CACHE_LOOKUP = "cache_lookup"          # Look up command by key
+    CACHE_STORE_EXEC = "cache_store_exec"  # Store command and execute
+    CACHE_HIT = "cache_hit"                # Lookup found the key
+    CACHE_MISS = "cache_miss"              # Lookup did not find key
 
 
 @dataclass
@@ -173,4 +178,70 @@ class ErrorResponse:
         return cls(
             error=payload["error"],
             code=payload.get("code", "UNKNOWN_ERROR")
+        )
+
+
+# ============================================================================
+# Cache Protocol Messages
+# ============================================================================
+
+@dataclass
+class CacheLookupRequest:
+    """Request to look up a cached command by key."""
+    key: str  # UUID
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"key": self.key}
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "CacheLookupRequest":
+        return cls(key=payload["key"])
+
+
+@dataclass
+class CacheLookupResponse:
+    """Response to cache lookup - either hit with command or miss."""
+    hit: bool
+    key: str
+    command: str | None = None  # Only set if hit=True
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "hit": self.hit,
+            "key": self.key,
+            "command": self.command
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "CacheLookupResponse":
+        return cls(
+            hit=payload["hit"],
+            key=payload["key"],
+            command=payload.get("command")
+        )
+
+
+@dataclass
+class CacheStoreExecRequest:
+    """Request to store a command and execute it."""
+    key: str  # UUID
+    command: str
+    cwd: str | None = None
+    timeout: int = 300
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "command": self.command,
+            "cwd": self.cwd,
+            "timeout": self.timeout
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "CacheStoreExecRequest":
+        return cls(
+            key=payload["key"],
+            command=payload["command"],
+            cwd=payload.get("cwd"),
+            timeout=payload.get("timeout", 300)
         )
