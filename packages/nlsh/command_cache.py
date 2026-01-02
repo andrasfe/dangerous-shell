@@ -81,6 +81,19 @@ class CommandCache:
     def _init_db(self):
         """Initialize the database schema."""
         conn = self._get_conn()
+
+        # Check if we need to migrate from old schema
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='commands'")
+        if cursor.fetchone():
+            # Table exists - check schema
+            cursor = conn.execute("PRAGMA table_info(commands)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if 'description' in columns and 'explanation' not in columns:
+                # Old schema - drop and recreate (cache data is expendable)
+                conn.execute("DROP TABLE commands")
+                conn.commit()
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS commands (
                 key TEXT PRIMARY KEY,
