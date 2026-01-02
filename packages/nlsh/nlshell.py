@@ -816,6 +816,7 @@ def execute_remote_command_cached(
                 lookup_result = await client.cache_lookup(key)
                 if lookup_result.hit:
                     # Remote has the command, execute it
+                    print(f"\033[2m⚡ cached\033[0m")
                     result = await client.execute_command(lookup_result.command, cwd=cwd)
                     return result.success, result.stdout, result.stderr, result.returncode
                 # Remote doesn't have it - fall through to store and execute
@@ -1422,6 +1423,7 @@ class NLShell:
     def _execute_direct(self, command: str):
         """Execute a command directly without LLM."""
         global _remote_cwd
+        print(f"\033[2m→ direct\033[0m")
 
         # Handle cd specially
         parts = command.strip().split()
@@ -1626,6 +1628,7 @@ Respond conversationally. Be concise but helpful."""
                 if user_input.startswith("!"):
                     direct_cmd = user_input[1:].strip()
                     if direct_cmd:
+                        print(f"\033[2m→ direct\033[0m")
                         if REMOTE_MODE:
                             # Remote execution
                             success, stdout, stderr, returncode = execute_remote_command(
