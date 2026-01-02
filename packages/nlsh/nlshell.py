@@ -830,11 +830,14 @@ def run_shell_command(
                 else:
                     target = parts[1]
 
-                # Quote the target for shell execution
-                quoted_target = shlex.quote(target)
+                # Quote the target for shell execution (but not ~ which needs expansion)
+                if target == "~" or target.startswith("~/"):
+                    shell_target = target  # Let shell expand ~
+                else:
+                    shell_target = shlex.quote(target)
                 # Check if directory exists on remote and get its absolute path
                 success, stdout, stderr, returncode = execute_remote_command(
-                    f'cd {quoted_target} && pwd',
+                    f'cd {shell_target} && pwd',
                     cwd=_remote_cwd
                 )
                 if success:
@@ -1382,9 +1385,13 @@ class NLShell:
         if parts and parts[0] == "cd":
             if REMOTE_MODE:
                 target = parts[1] if len(parts) > 1 else "~"
-                quoted_target = shlex.quote(target)
+                # Quote the target for shell execution (but not ~ which needs expansion)
+                if target == "~" or target.startswith("~/"):
+                    shell_target = target  # Let shell expand ~
+                else:
+                    shell_target = shlex.quote(target)
                 success, stdout, stderr, returncode = execute_remote_command(
-                    f'cd {quoted_target} && pwd',
+                    f'cd {shell_target} && pwd',
                     cwd=_remote_cwd
                 )
                 if success:
