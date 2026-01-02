@@ -52,10 +52,11 @@ class RemoteClient:
     async def connect(self) -> bool:
         """Connect to the remote server."""
         try:
-            self._websocket = await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 websockets.connect(self.ws_url),
                 timeout=self.timeout
             )
+            self._websocket = ws  # type: ignore[assignment]
             return True
         except asyncio.TimeoutError:
             raise ConnectionError(f"Connection timed out: {self.ws_url}")
@@ -245,9 +246,10 @@ def create_client_from_env() -> RemoteClient:
     """Create a RemoteClient from environment variables."""
     host = os.getenv("NLSH_REMOTE_HOST", "127.0.0.1")
     port = os.getenv("NLSH_REMOTE_PORT", "8765")
-    secret = os.getenv("NLSH_SHARED_SECRET")
+    private_key_path = os.getenv("NLSH_PRIVATE_KEY_PATH")
 
-    if not secret:
-        raise ValueError("NLSH_SHARED_SECRET not set")
+    if not private_key_path:
+        raise ValueError("NLSH_PRIVATE_KEY_PATH not set")
 
-    return RemoteClient(host=host, port=int(port), shared_secret=secret)
+    private_key = load_private_key(private_key_path)
+    return RemoteClient(host=host, port=int(port), private_key=private_key)

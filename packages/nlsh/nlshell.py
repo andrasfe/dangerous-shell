@@ -409,7 +409,7 @@ def confirm_suggested_command(
         # For any other response, loop back to prompt
 
 
-def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool, str | None]:
+def confirm_execution(command: str, explanation: str, warning: str | None = None) -> tuple[bool | str, str | None]:
     """Ask user to confirm command execution.
 
     Uses confirm_action() internally but maintains backward-compatible return type.

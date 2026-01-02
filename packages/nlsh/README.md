@@ -58,12 +58,35 @@ Cache files are stored at:
 - Local: `~/.nlsh/cache/commands.db` (embeddings + metadata)
 - Remote: `~/.nlsh/command_store.db` (key→command mapping)
 
+Cache indicators:
+- `⚡ cached` - Command retrieved from cache (LLM skipped)
+- `(cached for future use)` - Command stored in cache after execution
+- `→ direct` - Direct execution mode (no LLM)
+
 ## Usage
 
 ```bash
 python nlshell.py           # Local mode
 python nlshell.py --remote  # Remote mode (run ./tunnel.sh first)
 ```
+
+### Non-Interactive (Inline) Execution
+
+```bash
+# Execute shell command directly (no LLM)
+python nlshell.py -c "ls -la" --llm-off
+
+# Execute on remote server
+python nlshell.py --remote -c "cd ~/project && git pull" --llm-off
+
+# Process natural language request (uses LLM)
+python nlshell.py -c "find all large files"
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c`, `--inline` | Execute single command and exit |
+| `--llm-off` | Skip LLM processing (direct execution) |
 
 ## Commands
 
@@ -210,5 +233,12 @@ Histories are separate so local and remote commands don't mix.
 ## Testing
 
 ```bash
-python -m pytest test_nlshell.py -v
+# Run all tests
+python -m pytest test_nlshell.py test_command_cache.py test_embedding_client.py -v
+
+# Run specific test file
+python -m pytest test_command_cache.py -v
+
+# Type checking
+python -m mypy --explicit-package-bases nlshell.py command_cache.py embedding_client.py --ignore-missing-imports
 ```
