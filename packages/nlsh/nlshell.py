@@ -187,17 +187,223 @@ def load_skill(skill_name: str) -> str | None:
         return None
 
 
+def get_skill_metadata(skill_name: str) -> dict | None:
+    """Get metadata from a skill's YAML frontmatter.
+
+    Args:
+        skill_name: Name of the skill directory
+
+    Returns:
+        Dict with 'name', 'description', and 'active' (bool) keys, or None if not found.
+    """
+    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+    if not skill_path.exists():
+        return None
+
+    try:
+        content = skill_path.read_text()
+        if not content.startswith("---"):
+            return {"name": skill_name, "description": "No description", "active": False}
+
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return {"name": skill_name, "description": "No description", "active": False}
+
+        # Parse YAML frontmatter
+        import re
+        frontmatter = parts[1].strip()
+        metadata = {"name": skill_name, "description": "No description", "active": False}
+
+        # Simple YAML parsing for name and description
+        name_match = re.search(r'^name:\s*(.+)$', frontmatter, re.MULTILINE)
+        if name_match:
+            metadata["name"] = name_match.group(1).strip()
+
+        # Handle multi-line description
+        desc_match = re.search(r'^description:\s*\|?\s*\n((?:\s+.+\n?)+)', frontmatter, re.MULTILINE)
+        if desc_match:
+            desc_lines = desc_match.group(1).strip().split('\n')
+            metadata["description"] = ' '.join(line.strip() for line in desc_lines)
+        else:
+            # Single-line description
+            desc_match = re.search(r'^description:\s*(.+)$', frontmatter, re.MULTILINE)
+            if desc_match:
+                metadata["description"] = desc_match.group(1).strip()
+
+        # Check active_when condition
+        active_match = re.search(r'^active_when:\s*(.+)$', frontmatter, re.MULTILINE)
+        if active_match:
+            condition = active_match.group(1).strip()
+            # Evaluate common conditions
+            if condition == "REMOTE_MODE":
+                metadata["active"] = REMOTE_MODE
+            elif condition == "AUDIO_AVAILABLE":
+                metadata["active"] = AUDIO_AVAILABLE
+            elif condition == "CACHE_AVAILABLE":
+                metadata["active"] = CACHE_AVAILABLE
+            elif condition == "always":
+                metadata["active"] = True
+            else:
+                metadata["active"] = False
+        else:
+            # Skills without active_when are always available (but may not be loaded into prompt)
+            metadata["active"] = True
+
+        return metadata
+    except Exception:
+        return None
+
+
+def list_all_skills() -> list[dict]:
+    """List all available skills with their metadata.
+
+    Returns:
+        List of skill metadata dicts, sorted by name.
+    """
+    skills = []
+    if not SKILLS_DIR.exists():
+        return skills
+
+    for skill_dir in sorted(SKILLS_DIR.iterdir()):
+        if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+            metadata = get_skill_metadata(skill_dir.name)
+            if metadata:
+                skills.append(metadata)
+
+    return skills
+
+
+def get_loaded_skills() -> list[str]:
+    """Get list of skill names currently loaded into the system prompt.
+
+    Returns:
+        List of skill names that are active and loaded.
+    """
+    loaded = []
+
+    # Check which skills are loaded based on current mode
+    if REMOTE_MODE:
+        if load_skill("remote"):
+            loaded.append("remote")
+
+    # Voice skill is always available when audio is available
+    if AUDIO_AVAILABLE:
+        if load_skill("voice"):
+            loaded.append("voice")
+
+    # Cache skill when caching is available
+    if CACHE_AVAILABLE and REMOTE_MODE:
+        if load_skill("cache"):
+            loaded.append("cache")
+
+    # These skills are always loaded as they're core functionality
+    for skill in ["fix", "suggestions", "direct", "chat"]:
+        if load_skill(skill):
+            loaded.append(skill)
+
+    return loaded
+
+
+def display_skills():
+    """Display all available skills in a formatted table."""
+    skills = list_all_skills()
+    if not skills:
+        print("\033[1;33mNo skills found in packages/skills/\033[0m")
+        return
+
+    loaded = get_loaded_skills()
+
+    print("\n\033[1;36m╔════════════════════════════════════════════════════════════════╗\033[0m")
+    print("\033[1;36m║                     Available Skills                           ║\033[0m")
+    print("\033[1;36m╠════════════════════════════════════════════════════════════════╣\033[0m")
+
+    for skill in skills:
+        name = skill["name"]
+        desc = skill["description"][:50] + "..." if len(skill["description"]) > 50 else skill["description"]
+
+        # Status indicator
+        if name in loaded:
+            status = "\033[1;32m●\033[0m"  # Green dot = loaded
+        else:
+            status = "\033[1;90m○\033[0m"  # Gray dot = available but not loaded
+
+        print(f"\033[1;36m║\033[0m {status} \033[1;33m{name:<12}\033[0m {desc:<48} \033[1;36m║\033[0m")
+
+    print("\033[1;36m╠════════════════════════════════════════════════════════════════╣\033[0m")
+    print("\033[1;36m║\033[0m  \033[1;32m●\033[0m = loaded   \033[1;90m○\033[0m = available                                    \033[1;36m║\033[0m")
+    print("\033[1;36m║\033[0m  Use \033[1;33m/skill <name>\033[0m to view skill details                      \033[1;36m║\033[0m")
+    print("\033[1;36m╚════════════════════════════════════════════════════════════════╝\033[0m")
+
+
+def display_skill_detail(skill_name: str):
+    """Display detailed information about a specific skill."""
+    metadata = get_skill_metadata(skill_name)
+    if not metadata:
+        print(f"\033[1;31mSkill not found: {skill_name}\033[0m")
+        print("\033[2mUse /skills to see available skills\033[0m")
+        return
+
+    content = load_skill(skill_name)
+    loaded = get_loaded_skills()
+    is_loaded = skill_name in loaded
+
+    status = "\033[1;32m[LOADED]\033[0m" if is_loaded else "\033[1;90m[AVAILABLE]\033[0m"
+
+    print(f"\n\033[1;36m{'═' * 66}\033[0m")
+    print(f"\033[1;33m{metadata['name'].upper()}\033[0m {status}")
+    print(f"\033[1;36m{'═' * 66}\033[0m")
+    print(f"\033[2m{metadata['description']}\033[0m")
+    print(f"\033[1;36m{'─' * 66}\033[0m")
+
+    if content:
+        # Print skill content with some formatting
+        for line in content.split('\n'):
+            if line.startswith('# '):
+                print(f"\n\033[1;35m{line}\033[0m")
+            elif line.startswith('## '):
+                print(f"\n\033[1;34m{line}\033[0m")
+            elif line.startswith('**'):
+                print(f"\033[1;33m{line}\033[0m")
+            elif line.startswith('|'):
+                print(f"\033[2m{line}\033[0m")
+            elif line.startswith('```'):
+                print(f"\033[2m{line}\033[0m")
+            else:
+                print(line)
+
+    print(f"\n\033[1;36m{'═' * 66}\033[0m")
+
+
 def get_system_prompt() -> str:
     """Get the system prompt with current shell info and active skills."""
     shell_name = Path(SHELL_EXECUTABLE).name
     shell_path = SHELL_EXECUTABLE
     prompt = SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
 
-    # Load skills based on active modes
+    # Load skills based on active modes and conditions
+    skills_to_load = []
+
+    # Remote mode skill
     if REMOTE_MODE:
-        remote_skill = load_skill("remote")
-        if remote_skill:
-            prompt += "\n\n" + remote_skill
+        skills_to_load.append("remote")
+        # Cache skill is relevant in remote mode
+        if CACHE_AVAILABLE:
+            skills_to_load.append("cache")
+
+    # Voice skill when audio is available
+    if AUDIO_AVAILABLE:
+        skills_to_load.append("voice")
+
+    # Core skills always loaded (fix, suggestions, direct, chat)
+    skills_to_load.extend(["fix", "suggestions", "direct", "chat"])
+
+    # Load and append all skills
+    loaded_count = 0
+    for skill_name in skills_to_load:
+        skill_content = load_skill(skill_name)
+        if skill_content:
+            prompt += f"\n\n## Skill: {skill_name.upper()}\n\n{skill_content}"
+            loaded_count += 1
 
     return prompt
 
@@ -1629,25 +1835,39 @@ Respond conversationally. Be concise but helpful."""
     def run(self):
         """Main shell loop."""
         history_count = len(load_recent_history())
+        loaded_skills = get_loaded_skills()
+        all_skills = list_all_skills()
+
         print("\033[1;36m╔════════════════════════════════════════════╗\033[0m")
         print("\033[1;36m║   Natural Language Shell (nlsh)            ║\033[0m")
         print("\033[1;36m║   Powered by LangChain DeepAgents          ║\033[0m")
-        print("\033[1;36m║   Type 'exit' or 'quit' to leave           ║\033[0m")
-        print("\033[1;36m║   Type '!' prefix for direct commands      ║\033[0m")
-        print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
-        print("\033[1;36m║   Type '//' to toggle LLM on/off           ║\033[0m")
-        print("\033[1;36m║   Type '/ch' to clear history              ║\033[0m")
-        print("\033[1;36m║   Type '/d' to toggle danger mode          ║\033[0m")
-        print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
+        print("\033[1;36m╠════════════════════════════════════════════╣\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33m!\033[0m prefix   Direct command execution       \033[1;36m║\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33m?\033[0m prefix   Chat mode (no commands)        \033[1;36m║\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33m//\033[0m         Toggle LLM on/off              \033[1;36m║\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33mv\033[0m          Voice input                    \033[1;36m║\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33m/skills\033[0m    List available skills          \033[1;36m║\033[0m")
+        print("\033[1;36m║\033[0m  \033[1;33m/d\033[0m         Toggle danger mode             \033[1;36m║\033[0m")
+        print("\033[1;36m╠════════════════════════════════════════════╣\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
         if REMOTE_MODE:
-            print(f"\033[1;36m║   Mode: REMOTE (SSH tunnel)                ║\033[0m")
+            print(f"\033[1;36m║\033[0m  Mode: \033[1;35mREMOTE\033[0m (SSH tunnel)                 \033[1;36m║\033[0m")
         else:
-            print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
-        print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
+            print(f"\033[1;36m║\033[0m  Shell: \033[1;33m{shell_name:<4}\033[0m | Memory: on                \033[1;36m║\033[0m")
+        print(f"\033[1;36m║\033[0m  Model: \033[2m{MODEL[:34]:<34}\033[0m \033[1;36m║\033[0m")
         if AUDIO_AVAILABLE:
-            print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
-        print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
+            print(f"\033[1;36m║\033[0m  Voice: \033[2m{VOICE_MODEL[:34]:<34}\033[0m \033[1;36m║\033[0m")
+        print(f"\033[1;36m║\033[0m  History: \033[1;32m{history_count}\033[0m commands loaded{' ' * (25 - len(str(history_count)))}\033[1;36m║\033[0m")
+
+        # Show skills summary
+        if loaded_skills:
+            skills_str = ", ".join(loaded_skills[:4])
+            if len(loaded_skills) > 4:
+                skills_str += f" +{len(loaded_skills) - 4}"
+            print(f"\033[1;36m║\033[0m  Skills: \033[1;32m{len(loaded_skills)}\033[0m loaded ({skills_str}){' ' * max(0, 23 - len(skills_str))}\033[1;36m║\033[0m")
+        else:
+            print(f"\033[1;36m║\033[0m  Skills: \033[1;33m{len(all_skills)}\033[0m available (use /skills)      \033[1;36m║\033[0m")
+
         print("\033[1;36m╚════════════════════════════════════════════╝\033[0m")
 
         try:
@@ -1773,6 +1993,20 @@ Respond conversationally. Be concise but helpful."""
                         print("\033[1;31m⚠️  DANGER MODE ON - Commands execute without confirmation!\033[0m")
                     else:
                         print("\033[1;32m✓ Safe mode - Commands require confirmation\033[0m")
+                    continue
+
+                # List available skills
+                if user_input in ("/skills", "/sk"):
+                    display_skills()
+                    continue
+
+                # Show specific skill details
+                if user_input.startswith("/skill "):
+                    skill_name = user_input[7:].strip()
+                    if skill_name:
+                        display_skill_detail(skill_name)
+                    else:
+                        print("\033[1;33mUsage: /skill <name>\033[0m")
                     continue
 
                 # In direct mode, execute commands directly without LLM
