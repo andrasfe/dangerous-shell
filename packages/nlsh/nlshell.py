@@ -996,8 +996,9 @@ def run_shell_command(
                         current_cmd = next_cmd
                         continue  # Run the suggested/edited command
                     else:
-                        # User declined - skip LLM follow-up response
+                        # User declined suggested next command - stop here
                         shell_state.skip_llm_response = True
+                        return "Command executed successfully. User declined follow-up. Do NOT suggest any more commands - wait for new user input."
 
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
@@ -1012,7 +1013,7 @@ def run_shell_command(
                 fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
                 shell_state.skip_llm_response = True
-                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
+                return "Command failed. User declined fix. Do NOT suggest any more commands - wait for new user input."
 
             print("\033[2m(analyzing error...)\033[0m")
             fix_result = fix_failed_command_standalone(current_cmd, stderr, returncode)
@@ -1045,7 +1046,9 @@ def run_shell_command(
                 current_cmd = approved_cmd
                 continue  # Re-run with fixed/edited command
 
-            return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
+            # User declined the fix suggestion
+            shell_state.skip_llm_response = True
+            return "Command failed. User declined fix. Do NOT suggest any more commands - wait for new user input."
 
         except subprocess.TimeoutExpired:
             log_command(natural_request, current_cmd, False)
