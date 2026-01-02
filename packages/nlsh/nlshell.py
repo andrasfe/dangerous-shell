@@ -1858,6 +1858,17 @@ def main():
         action="store_true",
         help="Execute commands on remote server via SSH tunnel (run ./tunnel.sh first)"
     )
+    parser.add_argument(
+        "-c", "--inline",
+        type=str,
+        metavar="COMMAND",
+        help="Execute a single command and exit (non-interactive mode)"
+    )
+    parser.add_argument(
+        "--llm-off",
+        action="store_true",
+        help="Execute command directly without LLM processing (use with --inline)"
+    )
     args = parser.parse_args()
 
     if args.dangerously_skip_permissions:
@@ -1893,6 +1904,39 @@ def main():
         _remote_client = True  # Flag that remote is configured
         print(f"\033[1;35m🌐 Remote mode: via SSH tunnel (localhost:{REMOTE_PORT})\033[0m")
         print()
+
+    # Handle inline execution mode
+    if args.inline:
+        command = args.inline
+        if args.llm_off:
+            # Direct execution - no LLM
+            print(f"\033[2m→ direct\033[0m")
+            if REMOTE_MODE:
+                _success, stdout, stderr, returncode = execute_remote_command(command)
+            else:
+                proc_result = subprocess.run(
+                    command,
+                    shell=True,
+                    executable=SHELL_EXECUTABLE,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                stdout = proc_result.stdout
+                stderr = proc_result.stderr
+                returncode = proc_result.returncode
+
+            if stdout:
+                print(stdout, end="" if stdout.endswith("\n") else "\n")
+            if stderr:
+                print(f"\033[1;31m{stderr}\033[0m", end="" if stderr.endswith("\n") else "\n")
+
+            sys.exit(0 if returncode == 0 else returncode)
+        else:
+            # Use LLM to process the natural language request
+            shell = NLShell()
+            shell.process_input(command)
+            sys.exit(0)
 
     shell = NLShell()
     shell.run()
