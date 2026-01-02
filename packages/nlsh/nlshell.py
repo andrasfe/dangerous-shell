@@ -968,12 +968,18 @@ def run_shell_command(
                     except Exception as e:
                         print(f"\033[2m(cache store error: {e})\033[0m")
 
-                # Check for suggested next command
-                full_output = stdout or ""
-                if stderr:
-                    full_output += "\n" + stderr
+                # Check for suggested next command (only for original command, not chained suggestions)
+                # Don't suggest if this was already a suggested command to avoid infinite chains
+                if not getattr(run_shell_command, '_is_suggested', False):
+                    full_output = stdout or ""
+                    if stderr:
+                        full_output += "\n" + stderr
 
-                suggestion = suggest_next_command(current_cmd, full_output, natural_request)
+                    suggestion = suggest_next_command(current_cmd, full_output, natural_request)
+                else:
+                    suggestion = None
+                    run_shell_command._is_suggested = False  # Reset for next call
+
                 if suggestion:
                     # Create regenerate function with captured context
                     def regenerate_next(prev_suggestion: str, feedback: str) -> Optional[dict]:
@@ -994,6 +1000,7 @@ def run_shell_command(
                     )
                     if next_cmd:
                         current_cmd = next_cmd
+                        run_shell_command._is_suggested = True  # Mark as suggested to prevent chaining
                         continue  # Run the suggested/edited command
                     else:
                         # User declined suggested next command - stop here
