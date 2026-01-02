@@ -13,6 +13,7 @@ import base64
 import io
 import wave
 import argparse
+import shlex
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
@@ -809,7 +810,10 @@ def run_shell_command(
     """
     # Handle cd commands specially
     global _remote_cwd
-    parts = command.strip().split()
+    try:
+        parts = shlex.split(command.strip())
+    except ValueError:
+        parts = command.strip().split()
     if parts and parts[0] == "cd":
         should_execute, final_command = confirm_execution(command, explanation, warning)
         if should_execute == "feedback":
@@ -826,9 +830,11 @@ def run_shell_command(
                 else:
                     target = parts[1]
 
+                # Quote the target for shell execution
+                quoted_target = shlex.quote(target)
                 # Check if directory exists on remote and get its absolute path
                 success, stdout, stderr, returncode = execute_remote_command(
-                    f'cd {target} && pwd',
+                    f'cd {quoted_target} && pwd',
                     cwd=_remote_cwd
                 )
                 if success:
@@ -1368,13 +1374,17 @@ class NLShell:
         global _remote_cwd
         print(f"\033[2m→ direct\033[0m")
 
-        # Handle cd specially
-        parts = command.strip().split()
+        # Handle cd specially - use shlex to handle quoted paths and escaped spaces
+        try:
+            parts = shlex.split(command.strip())
+        except ValueError:
+            parts = command.strip().split()
         if parts and parts[0] == "cd":
             if REMOTE_MODE:
                 target = parts[1] if len(parts) > 1 else "~"
+                quoted_target = shlex.quote(target)
                 success, stdout, stderr, returncode = execute_remote_command(
-                    f'cd {target} && pwd',
+                    f'cd {quoted_target} && pwd',
                     cwd=_remote_cwd
                 )
                 if success:
