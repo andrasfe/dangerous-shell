@@ -970,16 +970,16 @@ def run_shell_command(
 
                 # Check for suggested next command (only for original command, not chained suggestions)
                 # Don't suggest if this was already a suggested command to avoid infinite chains
-                if not getattr(run_shell_command, '_is_suggested', False):
-                    full_output = stdout or ""
-                    if stderr:
-                        full_output += "\n" + stderr
-
-                    suggestion = suggest_next_command(current_cmd, full_output, natural_request)
-                else:
-                    suggestion = None
+                if getattr(run_shell_command, '_is_suggested', False):
                     run_shell_command._is_suggested = False  # Reset for next call
+                    shell_state.skip_llm_response = True
+                    return "Command executed successfully. This was a follow-up command. Do NOT suggest any more commands - wait for new user input."
 
+                full_output = stdout or ""
+                if stderr:
+                    full_output += "\n" + stderr
+
+                suggestion = suggest_next_command(current_cmd, full_output, natural_request)
                 if suggestion:
                     # Create regenerate function with captured context
                     def regenerate_next(prev_suggestion: str, feedback: str) -> Optional[dict]:
