@@ -39,6 +39,7 @@ By using this software, you acknowledge that you understand these risks and acce
 - **Chat mode** - Ask questions with `?` prefix without executing commands
 - **Configurable model** - Use any LLM available on OpenRouter
 - **Automation mode** - `--dangerously-skip-permissions` flag for scripting
+- **Semantic command cache** - Caches commands by meaning; skips LLM for repeated requests
 
 ### More than just `history`. Example:
 
@@ -345,6 +346,66 @@ Run next command? [y/n/e(dit)/f(eedback)]: y
 
 This creates a natural workflow where you can chain related commands together.
 
+### Semantic Command Cache (Remote Mode)
+
+When using remote mode, nlsh caches commands by their semantic meaning. If you ask for the same thing twice (even with different wording), the system can skip the LLM and use the cached command.
+
+**How it works:**
+
+```
+User: "list all python files"
+         │
+         ▼
+    ┌─────────────┐
+    │ LLM generates│ → command: find . -name "*.py"
+    │ command      │ → explanation: "Find all Python files"
+    └─────────────┘
+         │
+         ▼
+    ┌─────────────┐
+    │ Embed       │ → Create vector embedding of explanation
+    │ explanation │
+    └─────────────┘
+         │
+         ▼
+    ┌─────────────────────────┐
+    │ Store in cache          │ → UUID → (command, explanation, embedding)
+    │ Send to remote          │
+    └─────────────────────────┘
+```
+
+**On subsequent requests:**
+
+```
+User: "show me the py files"  (similar meaning)
+         │
+         ▼
+    ┌─────────────┐
+    │ Search cache│ → Found similar! (0.92 similarity)
+    └─────────────┘
+         │
+         ▼
+    ┌─────────────┐
+    │ LLM validates│ → "Is 'find . -name *.py' appropriate?"
+    └─────────────┘
+         │
+         ▼
+    ┌─────────────┐
+    │ Use cached  │ → Skip LLM command generation!
+    │ command     │
+    └─────────────┘
+```
+
+**Benefits:**
+- Faster execution for repeated commands
+- Reduced API token usage
+- Semantic matching works across different phrasings
+- Commands stored on remote server by UUID (no sensitive data sent)
+
+**Cache locations:**
+- Local embeddings: `~/.nlsh/cache/commands.db`
+- Remote commands: `~/.nlsh/command_store.db` (on server)
+
 ### Automation Mode
 
 For scripting or automation, use the `--dangerously-skip-permissions` flag to skip all confirmation prompts:
@@ -532,7 +593,10 @@ This is a monorepo containing:
 ```
 packages/
 ├── nlsh/              # Natural language shell client
+│   ├── nlshell.py         # Main shell application
 │   ├── remote_client.py   # Remote execution client
+│   ├── command_cache.py   # Semantic command cache (embeddings)
+│   ├── embedding_client.py # OpenRouter embedding API
 │   ├── requirements.txt
 │   └── .env.example
 ├── nlsh_mcp/          # MCP server for remote execution
@@ -541,6 +605,7 @@ packages/
 │   └── tools.py           # MCP tool implementations
 ├── nlsh_remote/       # Remote execution server
 │   ├── server.py          # FastAPI WebSocket server
+│   ├── command_store.py   # Key-value store for cached commands
 │   ├── requirements.txt
 │   └── .env.example
 └── shared/            # Shared code between packages
@@ -558,7 +623,12 @@ packages/
 | `.env` | Project directory | Configuration |
 | `.nlshell_history` | Home directory | Readline input history |
 | `.nlshell_command_log` | Home directory | Translation log (JSON lines) |
+| `~/.nlsh/cache/commands.db` | Home directory | Local command cache (embeddings) |
+| `~/.nlsh/command_store.db` | Remote server | Remote command store (key→command) |
+| `packages/nlsh/command_cache.py` | Client | Semantic cache with vector search |
+| `packages/nlsh/embedding_client.py` | Client | OpenRouter embedding API wrapper |
 | `packages/nlsh_remote/server.py` | Remote server | WebSocket server for remote execution |
+| `packages/nlsh_remote/command_store.py` | Remote server | SQLite key-value store for commands |
 | `packages/shared/crypto.py` | Shared | HMAC message signing/verification |
 | `packages/shared/protocol.py` | Shared | Protocol message definitions |
 

@@ -7,6 +7,7 @@ An intelligent shell that translates natural language into shell commands using 
 - Natural language to shell command translation
 - Command confirmation with feedback option
 - Remote execution via SSH tunnel
+- Semantic command cache (skips LLM for repeated commands)
 - Local model support (LM Studio, Ollama)
 - Voice input (optional)
 - Separate history for local and remote modes
@@ -42,8 +43,20 @@ NLSH_LOCAL_MODEL_NAME=local-model
 NLSH_REMOTE_USER=your_username
 NLSH_REMOTE_HOST=192.168.1.100
 NLSH_REMOTE_PORT=8765
-NLSH_SHARED_SECRET=your_secret
+NLSH_PRIVATE_KEY_PATH=~/.nlsh/keys/nlsh_private.key
 ```
+
+### Semantic Cache (Optional)
+
+The cache uses embeddings to match similar commands. Configure the embedding model:
+
+```bash
+OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+Cache files are stored at:
+- Local: `~/.nlsh/cache/commands.db` (embeddings + metadata)
+- Remote: `~/.nlsh/command_store.db` (key→command mapping)
 
 ## Usage
 

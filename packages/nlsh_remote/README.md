@@ -43,7 +43,24 @@ python server.py  # Foreground
 ## Protocol
 
 WebSocket over SSH tunnel. Message types:
-- `COMMAND` - Execute shell command
-- `UPLOAD` - Upload file
-- `DOWNLOAD` - Download file
-- `PING/PONG` - Health check
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `COMMAND` | Client → Server | Execute shell command |
+| `UPLOAD` | Client → Server | Upload file |
+| `DOWNLOAD` | Client → Server | Download file |
+| `PING/PONG` | Both | Health check |
+| `CACHE_LOOKUP` | Client → Server | Look up command by UUID |
+| `CACHE_STORE_EXEC` | Client → Server | Store command and execute |
+| `CACHE_HIT` | Server → Client | Lookup found the command |
+| `CACHE_MISS` | Server → Client | Lookup did not find command |
+
+## Command Cache
+
+The server maintains a key-value store (`~/.nlsh/command_store.db`) for cached commands. This enables:
+
+- **Reduced data transfer**: Only UUID sent for cached commands
+- **Semantic matching**: Client embeds requests, server stores by UUID
+- **Future RBAC**: Access control based on command keys
+
+The cache is used automatically when nlsh runs in remote mode.
