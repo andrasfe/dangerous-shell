@@ -115,7 +115,8 @@ class CommandCache:
     def _get_conn(self) -> sqlite3.Connection:
         """Get or create database connection."""
         if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
+            # check_same_thread=False allows use across threads (LangChain tools run in threads)
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         return self._conn
 
     def _embedding_to_bytes(self, embedding: np.ndarray) -> bytes:
