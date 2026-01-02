@@ -110,6 +110,9 @@ class ShellState:
 
 shell_state = ShellState()
 
+# Skills directory (relative to this script)
+SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
 # System prompt for the agent
 SYSTEM_PROMPT = """You are an intelligent shell assistant that helps users execute commands on their system.
 
@@ -144,24 +147,50 @@ Your primary function is to translate natural language requests into zsh shell c
 - Keep responses concise - this is a command line interface
 - When installing projects, ALWAYS read the documentation first to understand requirements
 
-## Remote Mode (when active):
-In remote mode, `run_shell_command` executes on the REMOTE server, not locally.
-- For LOCAL to REMOTE file transfer: use `upload_file` (NOT scp/rsync via run_shell_command)
-- For REMOTE to LOCAL file transfer: use `download_file` (NOT scp/rsync via run_shell_command)
-- Paths like ~/.nlsh/, ~/.ssh/ in user requests typically refer to LOCAL files
-- Environment variables like NLSH_REMOTE_HOST exist on LOCAL, not on the remote server
-- When user says "copy X to the server", X is a LOCAL file - use upload_file
-
 ## Context:
 - Shell: {shell_name} (commands run via {shell_path})
 - Current working directory will be provided with each command
 - Execution history is available for context"""
 
+
+def load_skill(skill_name: str) -> str | None:
+    """Load a skill's content from SKILL.md file.
+
+    Args:
+        skill_name: Name of the skill directory (e.g., "remote")
+
+    Returns:
+        The skill content (body only, without YAML frontmatter), or None if not found.
+    """
+    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+    if not skill_path.exists():
+        return None
+
+    try:
+        content = skill_path.read_text()
+        # Strip YAML frontmatter (between --- markers)
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                return parts[2].strip()
+        return content.strip()
+    except Exception:
+        return None
+
+
 def get_system_prompt() -> str:
-    """Get the system prompt with current shell info."""
+    """Get the system prompt with current shell info and active skills."""
     shell_name = Path(SHELL_EXECUTABLE).name
     shell_path = SHELL_EXECUTABLE
-    return SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
+    prompt = SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
+
+    # Load skills based on active modes
+    if REMOTE_MODE:
+        remote_skill = load_skill("remote")
+        if remote_skill:
+            prompt += "\n\n" + remote_skill
+
+    return prompt
 
 
 def input_no_history(prompt: str = "") -> str:
