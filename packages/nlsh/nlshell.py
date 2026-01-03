@@ -398,12 +398,10 @@ def get_system_prompt() -> str:
     skills_to_load.extend(["fix", "suggestions", "direct", "chat", "scripts"])
 
     # Load and append all skills
-    loaded_count = 0
     for skill_name in skills_to_load:
         skill_content = load_skill(skill_name)
         if skill_content:
             prompt += f"\n\n## Skill: {skill_name.upper()}\n\n{skill_content}"
-            loaded_count += 1
 
     return prompt
 
@@ -901,7 +899,6 @@ def run_script(
     Returns:
         Script output or error message
     """
-    import tempfile
     import uuid
 
     # Ensure script has a shebang
@@ -966,38 +963,51 @@ def run_script(
     current_script = script
     while True:
         if REMOTE_MODE:
-            # Remote execution: upload script then run it
+            # Remote execution: write local temp, upload, run, cleanup
             print(f"\n\033[2mUploading and executing on remote...\033[0m")
 
+            # Write script to local temp file first
+            local_temp = f"/tmp/nlsh_local_{uuid.uuid4().hex[:8]}.sh"
+            try:
+                with open(local_temp, 'w') as f:
+                    f.write(current_script)
+                os.chmod(local_temp, 0o755)
+            except Exception as e:
+                return f"Error writing local temp script: {e}"
+
             async def _run_remote_script():
-                async with RemoteClient(
-                    host="127.0.0.1",
-                    port=REMOTE_PORT,
-                    private_key=REMOTE_PRIVATE_KEY
-                ) as client:
-                    # Upload the script
-                    import base64
-                    script_bytes = current_script.encode('utf-8')
-                    upload_result = await client.upload_file(
-                        local_path=None,  # We'll pass content directly
-                        remote_path=script_filename,
-                        mode="0755",
-                        content=base64.b64encode(script_bytes).decode('utf-8')
-                    )
-                    if not upload_result.success:
-                        return False, "", f"Failed to upload script: {upload_result.message}", -1
+                try:
+                    async with RemoteClient(
+                        host="127.0.0.1",
+                        port=REMOTE_PORT,
+                        private_key=REMOTE_PRIVATE_KEY
+                    ) as client:
+                        # Upload the script from local temp file
+                        upload_result = await client.upload_file(
+                            local_path=local_temp,
+                            remote_path=script_filename,
+                            mode="0755"
+                        )
+                        if not upload_result.success:
+                            return False, "", f"Failed to upload script: {upload_result.message}", -1
 
-                    # Execute the script
-                    exec_result = await client.execute_command(
-                        f"bash {script_filename}",
-                        cwd=_remote_cwd,
-                        timeout=600  # 10 minutes for scripts
-                    )
+                        # Execute the script
+                        exec_result = await client.execute_command(
+                            f"bash {script_filename}",
+                            cwd=_remote_cwd,
+                            timeout=600  # 10 minutes for scripts
+                        )
 
-                    # Clean up the script
-                    await client.execute_command(f"rm -f {script_filename}", cwd=None)
+                        # Clean up the remote script
+                        await client.execute_command(f"rm -f {script_filename}", cwd=None)
 
-                    return exec_result.success, exec_result.stdout, exec_result.stderr, exec_result.returncode
+                        return exec_result.success, exec_result.stdout, exec_result.stderr, exec_result.returncode
+                finally:
+                    # Clean up local temp file
+                    try:
+                        os.remove(local_temp)
+                    except OSError:
+                        pass
 
             try:
                 success, stdout, stderr, returncode = asyncio.run(_run_remote_script())
@@ -1034,7 +1044,7 @@ def run_script(
                 # Clean up
                 try:
                     os.remove(script_filename)
-                except:
+                except OSError:
                     pass
 
         # Display output
