@@ -109,14 +109,8 @@ def run_shell_script(
     Returns:
         Execution results including stdout, stderr, and status
     """
-    # Import here to avoid circular imports
-    from nlshell import (
-        shell_state,
-        REMOTE_MODE,
-        SKIP_PERMISSIONS,
-        input_no_history,
-        _remote_cwd,
-    )
+    # Import module to access runtime globals (REMOTE_MODE changes at runtime)
+    import nlshell
 
     # Create a GeneratedScript object for review
     generated = GeneratedScript(
@@ -163,23 +157,23 @@ def run_shell_script(
     display_script_code(script)
 
     # Handle auto-execution mode
-    if SKIP_PERMISSIONS:
+    if nlshell.SKIP_PERMISSIONS:
         print("\033[2m(auto-executing: --dangerously-skip-permissions)\033[0m")
     else:
         # Confirmation prompt
         if review.risk_level == RiskLevel.DANGEROUS:
             prompt = "Execute? Type 'EXECUTE' to confirm: "
-            response = input_no_history(prompt).strip()
+            response = nlshell.input_no_history(prompt).strip()
             if response != "EXECUTE":
                 return "Script cancelled by user."
         elif review.risk_level == RiskLevel.CRITICAL:
             return "Script rejected: Critical safety issues found."
         else:
             prompt = "Execute? [y/n/e(dit)/f(eedback)]: "
-            response = input_no_history(prompt).lower().strip()
+            response = nlshell.input_no_history(prompt).lower().strip()
 
             if response == "f":
-                feedback = input_no_history("Feedback for LLM: ")
+                feedback = nlshell.input_no_history("Feedback for LLM: ")
                 return f"User feedback on script: {feedback}. Please modify the script accordingly."
             elif response == "e":
                 print("Script editing not yet implemented. Please provide feedback instead.")
@@ -188,11 +182,11 @@ def run_shell_script(
                 return "Script cancelled by user."
 
     # Get working directory
-    if REMOTE_MODE:
-        cwd = _remote_cwd
+    if nlshell.REMOTE_MODE:
+        cwd = nlshell._remote_cwd
         print(f"\n\033[2mExecuting script on remote...\033[0m\n")
     else:
-        cwd = str(shell_state.cwd)
+        cwd = str(nlshell.shell_state.cwd)
         print(f"\n\033[2mExecuting script...\033[0m\n")
 
     # Output callback for streaming
@@ -202,16 +196,15 @@ def run_shell_script(
         else:
             print(f"\033[1;31m{data}\033[0m", end="")
 
-    if REMOTE_MODE:
+    if nlshell.REMOTE_MODE:
         # Execute on remote server
         from remote_client import RemoteClient
-        from nlshell import REMOTE_PORT, REMOTE_PRIVATE_KEY
 
         async def do_remote_execute():
             async with RemoteClient(
                 host="127.0.0.1",  # Always localhost (through SSH tunnel)
-                port=REMOTE_PORT,
-                private_key=REMOTE_PRIVATE_KEY
+                port=nlshell.REMOTE_PORT,
+                private_key=nlshell.REMOTE_PRIVATE_KEY
             ) as client:
                 return await client.execute_script(
                     script_id="remote-script",
