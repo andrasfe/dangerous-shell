@@ -1621,8 +1621,17 @@ Respond conversationally. Be concise but helpful."""
         # Store current request for cache storage (used by run_shell_command)
         shell_state.current_request = user_input
 
+        # Skip cache for script requests - these need the LLM to generate scripts
+        user_lower = user_input.lower()
+        is_script_request = any(phrase in user_lower for phrase in [
+            "write a script", "create a script", "make a script",
+            "shell script", "bash script", "write script",
+            "generate a script", "build a script",
+        ])
+
         # Check cache FIRST in remote mode to potentially skip LLM
-        if REMOTE_MODE and CACHE_AVAILABLE:
+        # But skip cache for script requests
+        if REMOTE_MODE and CACHE_AVAILABLE and not is_script_request:
             try:
                 cache = get_command_cache()
                 cache.set_llm_validator(validate_cached_command)
