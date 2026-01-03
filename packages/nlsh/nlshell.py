@@ -297,7 +297,7 @@ def get_loaded_skills() -> list[str]:
             loaded.append("cache")
 
     # These skills are always loaded as they're core functionality
-    for skill in ["fix", "suggestions", "direct", "chat"]:
+    for skill in ["fix", "suggestions", "direct", "chat", "scripts"]:
         if load_skill(skill):
             loaded.append(skill)
 
@@ -394,8 +394,8 @@ def get_system_prompt() -> str:
     if AUDIO_AVAILABLE:
         skills_to_load.append("voice")
 
-    # Core skills always loaded (fix, suggestions, direct, chat)
-    skills_to_load.extend(["fix", "suggestions", "direct", "chat"])
+    # Core skills always loaded (fix, suggestions, direct, chat, scripts)
+    skills_to_load.extend(["fix", "suggestions", "direct", "chat", "scripts"])
 
     # Load and append all skills
     loaded_count = 0
@@ -874,6 +874,271 @@ def download_file(
             return f"Download failed: {result.message}"
     except Exception as e:
         return f"Error downloading file: {e}"
+
+
+def run_script(
+    script: Annotated[str, "The shell script content to execute (should start with #!/bin/bash or similar)"],
+    explanation: Annotated[str, "Brief explanation of what this script does"],
+    script_name: Annotated[str, "Optional name for the script file"] = "nlsh_script.sh",
+    warning: Annotated[str | None, "Safety warning for dangerous operations"] = None,
+) -> str:
+    """
+    Write and execute a shell script.
+
+    Use this tool when a task requires multiple commands, conditionals, loops,
+    or complex logic that would be better expressed as a script rather than
+    individual commands.
+
+    The script will be shown to the user for review before execution.
+    In remote mode, the script is uploaded and executed on the remote server.
+
+    Args:
+        script: The complete shell script content
+        explanation: What the script accomplishes
+        script_name: Name for the script file (default: nlsh_script.sh)
+        warning: Safety warning for dangerous scripts
+
+    Returns:
+        Script output or error message
+    """
+    import tempfile
+    import uuid
+
+    # Ensure script has a shebang
+    if not script.strip().startswith("#!"):
+        script = "#!/bin/bash\nset -e\n" + script
+
+    # Display script for confirmation
+    print(f"\n\033[1;33mExplanation:\033[0m {explanation}")
+    if warning:
+        print(f"\033[1;31mWarning:\033[0m {warning}")
+
+    print(f"\n\033[1;36mScript ({script_name}):\033[0m")
+    print("\033[2m" + "─" * 60 + "\033[0m")
+    # Number the lines for easier reference
+    for i, line in enumerate(script.split('\n'), 1):
+        print(f"\033[2m{i:3}│\033[0m {line}")
+    print("\033[2m" + "─" * 60 + "\033[0m")
+
+    if SKIP_PERMISSIONS:
+        print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+    else:
+        while True:
+            response = input_no_history(f"\n\033[1;32mExecute script? [y/n/e(dit)/f(eedback)]:\033[0m ").strip().lower()
+
+            if response in ("y", "yes"):
+                break
+            elif response in ("n", "no"):
+                shell_state.skip_llm_response = True
+                return "Script cancelled by user."
+            elif response in ("e", "edit"):
+                print("\033[1;34mPaste edited script (end with EOF on a new line):\033[0m")
+                lines = []
+                while True:
+                    try:
+                        line = input()
+                        if line.strip() == "EOF":
+                            break
+                        lines.append(line)
+                    except EOFError:
+                        break
+                if lines:
+                    script = '\n'.join(lines)
+                    # Redisplay edited script
+                    print(f"\n\033[1;36mEdited script:\033[0m")
+                    print("\033[2m" + "─" * 60 + "\033[0m")
+                    for i, line in enumerate(script.split('\n'), 1):
+                        print(f"\033[2m{i:3}│\033[0m {line}")
+                    print("\033[2m" + "─" * 60 + "\033[0m")
+                continue
+            elif response in ("f", "feedback"):
+                feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
+                if feedback:
+                    return f"User feedback on script: {feedback}. Please regenerate the script based on this feedback."
+            else:
+                print("Please enter 'y', 'n', 'e', or 'f'")
+
+    # Generate unique script filename
+    unique_id = uuid.uuid4().hex[:8]
+    script_filename = f"/tmp/nlsh_{unique_id}_{script_name}"
+
+    # Execute the script
+    current_script = script
+    while True:
+        if REMOTE_MODE:
+            # Remote execution: upload script then run it
+            print(f"\n\033[2mUploading and executing on remote...\033[0m")
+
+            async def _run_remote_script():
+                async with RemoteClient(
+                    host="127.0.0.1",
+                    port=REMOTE_PORT,
+                    private_key=REMOTE_PRIVATE_KEY
+                ) as client:
+                    # Upload the script
+                    import base64
+                    script_bytes = current_script.encode('utf-8')
+                    upload_result = await client.upload_file(
+                        local_path=None,  # We'll pass content directly
+                        remote_path=script_filename,
+                        mode="0755",
+                        content=base64.b64encode(script_bytes).decode('utf-8')
+                    )
+                    if not upload_result.success:
+                        return False, "", f"Failed to upload script: {upload_result.message}", -1
+
+                    # Execute the script
+                    exec_result = await client.execute_command(
+                        f"bash {script_filename}",
+                        cwd=_remote_cwd,
+                        timeout=600  # 10 minutes for scripts
+                    )
+
+                    # Clean up the script
+                    await client.execute_command(f"rm -f {script_filename}", cwd=None)
+
+                    return exec_result.success, exec_result.stdout, exec_result.stderr, exec_result.returncode
+
+            try:
+                success, stdout, stderr, returncode = asyncio.run(_run_remote_script())
+            except Exception as e:
+                return f"Error executing remote script: {e}"
+        else:
+            # Local execution: write to temp file and run
+            print(f"\n\033[2mExecuting locally...\033[0m")
+
+            try:
+                # Write script to temp file
+                with open(script_filename, 'w') as f:
+                    f.write(current_script)
+                os.chmod(script_filename, 0o755)
+
+                # Execute
+                proc_result = subprocess.run(
+                    ["bash", script_filename],
+                    cwd=shell_state.cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minutes for scripts
+                )
+                success = proc_result.returncode == 0
+                stdout = proc_result.stdout
+                stderr = proc_result.stderr
+                returncode = proc_result.returncode
+
+            except subprocess.TimeoutExpired:
+                return "Script timed out after 10 minutes"
+            except Exception as e:
+                return f"Error executing script: {e}"
+            finally:
+                # Clean up
+                try:
+                    os.remove(script_filename)
+                except:
+                    pass
+
+        # Display output
+        if stdout:
+            print(stdout, end="")
+        if stderr:
+            print(f"\033[1;31m{stderr}\033[0m", end="")
+
+        # Check for success
+        stderr_has_errors = has_stderr_errors(stderr)
+        if returncode == 0 and not stderr_has_errors:
+            print(f"\033[1;32m✓ Script completed successfully\033[0m")
+            shell_state.last_command = f"[script] {script_name}"
+            shell_state.last_output = stdout
+            return f"Script executed successfully.\n\nOutput:\n{stdout}" if stdout else "Script executed successfully (no output)"
+
+        # Script failed - offer to fix
+        print(f"\033[1;31m✗ Script failed with exit code {returncode}\033[0m")
+
+        if SKIP_PERMISSIONS:
+            fix_response = "y"
+        else:
+            fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix the script? [y/n]:\033[0m ").strip().lower()
+
+        if fix_response not in ("y", "yes"):
+            shell_state.skip_llm_response = True
+            return f"Script failed with exit code {returncode}.\n\nStderr:\n{stderr}"
+
+        # Use LLM to fix the script
+        print("\033[2m(analyzing error...)\033[0m")
+        fix_result = fix_failed_script(current_script, stderr, returncode)
+
+        if not fix_result or not fix_result.get("fixed_script"):
+            print("\033[1;31mCouldn't determine a fix for this error.\033[0m")
+            return f"Script failed with exit code {returncode}.\n\nStderr:\n{stderr}"
+
+        fixed_script = fix_result["fixed_script"]
+        fix_explanation = fix_result.get("explanation", "")
+
+        # Show fixed script
+        print(f"\n\033[1;36mSuggested fix:\033[0m")
+        print(f"\033[1;33mExplanation:\033[0m {fix_explanation}")
+        print("\033[2m" + "─" * 60 + "\033[0m")
+        for i, line in enumerate(fixed_script.split('\n'), 1):
+            print(f"\033[2m{i:3}│\033[0m {line}")
+        print("\033[2m" + "─" * 60 + "\033[0m")
+
+        if SKIP_PERMISSIONS:
+            print("\033[1;35m(auto-executing: --dangerously-skip-permissions)\033[0m")
+            current_script = fixed_script
+            continue
+
+        response = input_no_history("\n\033[1;32mRun fixed script? [y/n/f(eedback)]:\033[0m ").strip().lower()
+
+        if response in ("y", "yes"):
+            current_script = fixed_script
+            continue
+        elif response in ("f", "feedback"):
+            feedback = input_no_history("\033[1;34mFeedback for LLM:\033[0m ").strip()
+            if feedback:
+                return f"User feedback on script fix: {feedback}. Please regenerate the script based on this feedback and the original error:\n{stderr}"
+        else:
+            shell_state.skip_llm_response = True
+            return f"Script failed. User declined fix.\n\nStderr:\n{stderr}"
+
+
+def fix_failed_script(script: str, stderr: str, returncode: int) -> dict | None:
+    """Use LLM to suggest a fix for a failed script."""
+    if _llm_instance is None:
+        return None
+
+    fix_prompt = f"""The following shell script failed:
+
+```bash
+{script}
+```
+
+Exit code: {returncode}
+Error output:
+{stderr}
+
+Current directory: {shell_state.cwd}
+
+Please analyze the error and provide a FIXED version of the script.
+Respond with ONLY a JSON object in this format:
+{{
+    "fixed_script": "the corrected script content",
+    "explanation": "brief explanation of what was wrong and how you fixed it"
+}}
+
+If the script cannot be fixed, set fixed_script to null."""
+
+    try:
+        response = _llm_instance.invoke(fix_prompt)
+        content = response.content.strip()
+
+        # Handle markdown code blocks
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1])
+
+        return json.loads(content)
+    except Exception:
+        return None
 
 
 # Commands that may require password input - run these interactively
@@ -1564,7 +1829,7 @@ class NLShell:
         # Create the deep agent with our tools
         self.agent = create_deep_agent(
             model=self.llm,
-            tools=[run_shell_command, read_file, list_directory, upload_file, download_file],
+            tools=[run_shell_command, read_file, list_directory, upload_file, download_file, run_script],
             system_prompt=get_system_prompt(),
         )
 
