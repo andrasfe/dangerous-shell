@@ -47,6 +47,13 @@ try:
 except ImportError:
     CACHE_AVAILABLE = False
 
+# Memory client import (for mem0 agentic memory)
+try:
+    from memory_client import get_memory_client, MemoryClient
+    MEMORY_AVAILABLE = True
+except ImportError:
+    MEMORY_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -92,30 +99,92 @@ class ShellState:
         self.cwd = Path.cwd()
         self.last_command = None
         self.last_output = None
-        self.conversation_history = []  # Track conversation for context
-        self.max_history = 20  # Keep last N exchanges
+        self.conversation_history = []  # Fallback: Track conversation for context
+        self.max_history = 20  # Keep last N exchanges (fallback mode)
         self.skip_llm_response = False  # Flag to skip LLM after user declines action
         self.current_request = ""  # Current user request (for cache storage)
+        self._memory_client = None  # Mem0 client (initialized lazily)
+        self._memory_checked = False  # Whether we've checked mem0 availability
+        self._use_mem0 = False  # Whether mem0 is active
+
+    def _init_memory(self):
+        """Initialize mem0 memory client if available."""
+        if self._memory_checked:
+            return
+        self._memory_checked = True
+
+        if MEMORY_AVAILABLE:
+            try:
+                self._memory_client = get_memory_client()
+                if self._memory_client.is_available:
+                    self._use_mem0 = True
+            except Exception:
+                pass
 
     def add_to_history(self, role: str, content: str):
-        """Add a message to conversation history."""
-        self.conversation_history.append({"role": role, "content": content})
-        # Trim old messages if needed
-        if len(self.conversation_history) > self.max_history * 2:
-            self.conversation_history = self.conversation_history[-self.max_history * 2:]
+        """Add a message to conversation history (mem0 or fallback)."""
+        self._init_memory()
 
-    def get_conversation_context(self) -> str:
-        """Get recent conversation for context."""
-        if not self.conversation_history:
+        if self._use_mem0:
+            # Use mem0 for persistent memory
+            self._memory_client.add_message(role, content)
+        else:
+            # Fallback to simple in-memory history
+            self.conversation_history.append({"role": role, "content": content})
+            if len(self.conversation_history) > self.max_history * 2:
+                self.conversation_history = self.conversation_history[-self.max_history * 2:]
+
+    def get_conversation_context(self, query: str = "") -> str:
+        """Get relevant conversation context.
+
+        Args:
+            query: Current user query for semantic search (mem0 mode).
+
+        Returns:
+            Formatted context string.
+        """
+        self._init_memory()
+
+        if self._use_mem0 and query:
+            # Use mem0 semantic search for relevant context
+            context = self._memory_client.get_context(query, limit=10)
+            if context:
+                return context
             return ""
+        else:
+            # Fallback to simple history
+            if not self.conversation_history:
+                return ""
 
-        lines = ["Recent conversation:"]
-        for msg in self.conversation_history[-10:]:  # Last 10 messages
-            role = "You" if msg["role"] == "assistant" else "User"
-            # Truncate long messages
-            content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
-            lines.append(f"  {role}: {content}")
-        return "\n".join(lines)
+            lines = ["Recent conversation:"]
+            for msg in self.conversation_history[-10:]:  # Last 10 messages
+                role = "You" if msg["role"] == "assistant" else "User"
+                # Truncate long messages
+                content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
+                lines.append(f"  {role}: {content}")
+            return "\n".join(lines)
+
+    def clear_memory(self) -> bool:
+        """Clear conversation memory."""
+        self._init_memory()
+
+        if self._use_mem0:
+            return self._memory_client.clear_memories()
+        else:
+            self.conversation_history = []
+            return True
+
+    @property
+    def memory_status(self) -> str:
+        """Get memory system status string."""
+        self._init_memory()
+        if self._use_mem0:
+            return "mem0"
+        elif MEMORY_AVAILABLE:
+            error = self._memory_client.error_message if self._memory_client else "init failed"
+            return f"fallback ({error})"
+        else:
+            return "fallback (mem0 not installed)"
 
 shell_state = ShellState()
 
@@ -1065,11 +1134,15 @@ def run_shell_command(
             return f"Error executing command: {e}"
 
 
-def get_current_context() -> str:
-    """Get current shell context for the agent."""
+def get_current_context(query: str = "") -> str:
+    """Get current shell context for the agent.
+
+    Args:
+        query: Current user query for semantic memory search.
+    """
     history = load_recent_history()
     history_str = format_history_context(history)
-    conversation_str = shell_state.get_conversation_context()
+    conversation_str = shell_state.get_conversation_context(query)
 
     parts = [f"Current working directory: {shell_state.cwd}"]
 
@@ -1505,7 +1578,7 @@ class NLShell:
         """Chat with the LLM without executing commands."""
         shell_state.add_to_history("user", message)
 
-        context = shell_state.get_conversation_context()
+        context = shell_state.get_conversation_context(message)
         chat_prompt = f"""You are a helpful assistant in a shell environment. The user is asking a question or having a conversation - they do NOT want you to execute any commands.
 
 Current directory: {shell_state.cwd}
@@ -1598,7 +1671,7 @@ Respond conversationally. Be concise but helpful."""
         # Save user message to conversation history
         shell_state.add_to_history("user", user_input)
 
-        context = get_current_context()
+        context = get_current_context(user_input)
         full_input = f"{context}\n\nUser request: {user_input}"
 
         try:
@@ -1637,13 +1710,19 @@ Respond conversationally. Be concise but helpful."""
         print("\033[1;36m║   Type '?' prefix for chat (no commands)   ║\033[0m")
         print("\033[1;36m║   Type '//' to toggle LLM on/off           ║\033[0m")
         print("\033[1;36m║   Type '/ch' to clear history              ║\033[0m")
+        print("\033[1;36m║   Type '/cm' to clear memory               ║\033[0m")
         print("\033[1;36m║   Type '/d' to toggle danger mode          ║\033[0m")
         print("\033[1;36m║   Type 'v' for voice input                 ║\033[0m")
         shell_name = Path(SHELL_EXECUTABLE).name
+        memory_status = shell_state.memory_status
         if REMOTE_MODE:
             print(f"\033[1;36m║   Mode: REMOTE (SSH tunnel)                ║\033[0m")
         else:
-            print(f"\033[1;36m║   Shell: {shell_name:<4} | Memory: on                 ║\033[0m")
+            # Format memory status to fit within the banner
+            mem_display = memory_status[:15] if len(memory_status) > 15 else memory_status
+            line = f"║   Shell: {shell_name:<4} | Memory: {mem_display}"
+            padding = 44 - len(line)
+            print(f"\033[1;36m{line}{' ' * padding}║\033[0m")
         print(f"\033[1;36m║   Model: {MODEL[:35]:<35}║\033[0m")
         if AUDIO_AVAILABLE:
             print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
@@ -1762,7 +1841,15 @@ Respond conversationally. Be concise but helpful."""
                     if history_file.exists():
                         history_file.unlink()
                     mode = "remote" if REMOTE_MODE else "local"
-                    print(f"\033[1;33m🗑️  Cleared {mode} command history\033[0m")
+                    print(f"\033[1;33mCleared {mode} command history\033[0m")
+                    continue
+
+                # Clear mem0 memory
+                if user_input in ("/clearmemory", "/cm"):
+                    if shell_state.clear_memory():
+                        print(f"\033[1;33mCleared conversation memory ({shell_state.memory_status})\033[0m")
+                    else:
+                        print(f"\033[1;31mFailed to clear memory\033[0m")
                     continue
 
                 # Toggle skip-permissions mode

@@ -86,6 +86,7 @@ All messages implement `to_payload()`/`from_payload()`:
 |------|---------|
 | `packages/nlsh/nlshell.py` | Main application (2000+ lines), DeepAgent, tools |
 | `packages/nlsh/command_cache.py` | Semantic caching with embeddings |
+| `packages/nlsh/memory_client.py` | Mem0 agentic memory integration |
 | `packages/nlsh/remote_client.py` | Async WebSocket client |
 | `packages/shared/asymmetric_crypto.py` | Ed25519 signing/verification |
 | `packages/shared/protocol.py` | Message dataclasses |
@@ -96,6 +97,7 @@ All messages implement `to_payload()`/`from_payload()`:
 Environment variables in `.env` files:
 - `OPENROUTER_API_KEY` - LLM provider
 - `OPENROUTER_MODEL` - Default: anthropic/claude-3.5-sonnet
+- `MEM0_MODEL` - Model for mem0 memory extraction (default: anthropic/claude-3.5-sonnet)
 - `NLSH_PRIVATE_KEY_PATH` - Ed25519 key for signing
 - `NLSH_REMOTE_PORT` - Default: 8765
 
@@ -117,4 +119,15 @@ git push
 - `?message` - Chat without execution
 - `//` - Toggle LLM on/off
 - `/d` - Toggle danger mode (skip confirmations)
+- `/ch` - Clear command history
+- `/cm` - Clear mem0 conversation memory
 - Confirmation options: `y`/`n`/`e(dit)`/`f(eedback)`
+
+## Memory System (Mem0)
+
+nlsh uses [mem0](https://github.com/mem0ai/mem0) for persistent agentic memory:
+- Automatically extracts facts and preferences from conversations
+- Semantic search retrieves relevant context for each query
+- Falls back to simple 20-entry history if mem0 is not installed
+
+Install mem0: `pip install mem0ai`
