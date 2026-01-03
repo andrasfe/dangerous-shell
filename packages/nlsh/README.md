@@ -8,6 +8,7 @@ An intelligent shell that translates natural language into shell commands using 
 - Command confirmation with feedback option
 - Remote execution via SSH tunnel
 - Semantic command cache (skips LLM for repeated commands)
+- Persistent memory via mem0 (remembers context across sessions)
 - Local model support (LM Studio, Ollama)
 - Voice input (optional)
 - Separate history for local and remote modes
@@ -63,6 +64,28 @@ Cache indicators:
 - `(cached for future use)` - Command stored in cache after execution
 - `→ direct` - Direct execution mode (no LLM)
 
+### Persistent Memory (Optional)
+
+nlsh can use [mem0](https://github.com/mem0ai/mem0) for persistent agentic memory:
+
+```bash
+pip install mem0ai
+```
+
+When enabled, nlsh:
+- Remembers facts and preferences from previous conversations
+- Uses semantic search to retrieve relevant context for each query
+- Persists memory across sessions
+
+Configure the model used for memory extraction:
+```bash
+MEM0_MODEL=anthropic/claude-3.5-sonnet  # Default
+```
+
+Memory status is shown in the shell banner:
+- `Memory: mem0` - Using mem0 persistent memory
+- `Memory: fallback` - Using simple 20-entry history (mem0 unavailable)
+
 ## Usage
 
 ```bash
@@ -97,6 +120,7 @@ python nlshell.py -c "find all large files"
 | `?question` | Chat with LLM (no command execution) |
 | `//` or `/llm` | Toggle LLM on/off (direct mode) |
 | `/ch` or `/clearhistory` | Clear command history for current mode |
+| `/cm` or `/clearmemory` | Clear conversation memory (mem0 or fallback) |
 | `/d` or `/danger` | Toggle danger mode (skip confirmations) |
 | `v` | Voice input |
 | `clear` | Clear screen |
@@ -234,11 +258,14 @@ Histories are separate so local and remote commands don't mix.
 
 ```bash
 # Run all tests
-python -m pytest test_nlshell.py test_command_cache.py test_embedding_client.py -v
+python -m pytest test_nlshell.py test_command_cache.py test_embedding_client.py test_memory_client.py -v
+
+# Run mem0 integration tests (standalone, no pytest needed)
+python run_integration_tests.py
 
 # Run specific test file
 python -m pytest test_command_cache.py -v
 
 # Type checking
-python -m mypy --explicit-package-bases nlshell.py command_cache.py embedding_client.py --ignore-missing-imports
+python -m mypy --explicit-package-bases nlshell.py command_cache.py embedding_client.py memory_client.py --ignore-missing-imports
 ```
