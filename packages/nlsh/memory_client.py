@@ -9,9 +9,12 @@ import hashlib
 from typing import Optional
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
+# Optional dotenv import
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
