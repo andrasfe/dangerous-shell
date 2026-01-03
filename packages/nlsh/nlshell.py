@@ -93,6 +93,18 @@ _remote_client = None
 # Remote working directory (separate from local cwd)
 _remote_cwd = None
 
+
+def get_current_directory() -> str:
+    """Get the current working directory based on mode.
+
+    Returns:
+        In remote mode: the remote cwd (or "~" if not yet initialized)
+        In local mode: the local shell_state.cwd
+    """
+    if REMOTE_MODE:
+        return _remote_cwd if _remote_cwd else "~"
+    return str(shell_state.cwd)
+
 # Global state for the shell
 class ShellState:
     def __init__(self):
@@ -262,7 +274,8 @@ def log_command(natural_input: str, command: str, success: bool):
                 "timestamp": datetime.now().isoformat(),
                 "input": natural_input,
                 "command": command,
-                "cwd": str(shell_state.cwd),
+                "cwd": get_current_directory(),
+                "remote": REMOTE_MODE,
                 "success": success
             }
             f.write(json.dumps(entry) + "\n")
@@ -1078,7 +1091,7 @@ def get_current_context() -> str:
     history_str = format_history_context(history)
     conversation_str = shell_state.get_conversation_context()
 
-    parts = [f"Current working directory: {shell_state.cwd}"]
+    parts = [f"Current working directory: {get_current_directory()}"]
 
     if conversation_str:
         parts.append(conversation_str)
@@ -1105,7 +1118,8 @@ Exit code: {returncode}
 Error output:
 {stderr}
 
-Current directory: {shell_state.cwd}
+Current directory: {get_current_directory()}
+{"Execution mode: REMOTE (paths should be relative to remote server)" if REMOTE_MODE else ""}
 
 IMPORTANT: If the error output contains "User feedback:", this is direct input from the user correcting or guiding your fix. You MUST incorporate this feedback into your new suggestion. The user's feedback takes priority over your previous analysis.
 
@@ -1520,7 +1534,8 @@ class NLShell:
         context = shell_state.get_conversation_context()
         chat_prompt = f"""You are a helpful assistant in a shell environment. The user is asking a question or having a conversation - they do NOT want you to execute any commands.
 
-Current directory: {shell_state.cwd}
+Current directory: {get_current_directory()}
+{"Mode: REMOTE (commands execute on remote server)" if REMOTE_MODE else ""}
 
 {context}
 
@@ -1661,6 +1676,19 @@ Respond conversationally. Be concise but helpful."""
             print(f"\033[1;36m║   Voice: {VOICE_MODEL[:35]:<35}║\033[0m")
         print(f"\033[1;36m║   History: {history_count} commands loaded{' ' * (27 - len(str(history_count)))}║\033[0m")
         print("\033[1;36m╚════════════════════════════════════════════╝\033[0m")
+
+        # Initialize remote cwd if in remote mode
+        if REMOTE_MODE:
+            global _remote_cwd
+            try:
+                success, stdout, stderr, returncode = execute_remote_command("pwd")
+                if success and stdout.strip():
+                    _remote_cwd = stdout.strip()
+                    print(f"\033[2mRemote directory: {_remote_cwd}\033[0m")
+                else:
+                    print("\033[1;33mWarning: Could not get remote directory\033[0m")
+            except Exception as e:
+                print(f"\033[1;33mWarning: Could not initialize remote cwd: {e}\033[0m")
 
         try:
             while True:
