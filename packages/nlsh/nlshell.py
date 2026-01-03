@@ -94,6 +94,16 @@ _remote_client = None
 _remote_cwd = None
 
 
+def is_remote_mode() -> bool:
+    """Check if running in remote mode. Use this instead of REMOTE_MODE directly."""
+    return REMOTE_MODE
+
+
+def get_remote_cwd() -> str | None:
+    """Get the remote working directory."""
+    return _remote_cwd
+
+
 def get_current_directory() -> str:
     """Get the current working directory based on mode.
 
