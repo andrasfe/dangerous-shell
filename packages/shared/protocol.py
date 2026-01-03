@@ -20,6 +20,12 @@ class MessageType(str, Enum):
     CACHE_STORE_EXEC = "cache_store_exec"  # Store command and execute
     CACHE_HIT = "cache_hit"                # Lookup found the key
     CACHE_MISS = "cache_miss"              # Lookup did not find key
+    # Script execution messages
+    SCRIPT = "script"                      # Execute a multi-line script
+    SCRIPT_OUTPUT = "script_output"        # Streaming output chunk
+    SCRIPT_COMPLETE = "script_complete"    # Script execution completed
+    SCRIPT_CANCEL = "script_cancel"        # Cancel a running script
+    SCRIPT_CANCELLED = "script_cancelled"  # Confirmation of cancellation
 
 
 @dataclass
@@ -244,4 +250,147 @@ class CacheStoreExecRequest:
             command=payload["command"],
             cwd=payload.get("cwd"),
             timeout=payload.get("timeout", 300)
+        )
+
+
+# ============================================================================
+# Script Execution Protocol Messages
+# ============================================================================
+
+@dataclass
+class ScriptRequest:
+    """Request to execute a shell script."""
+    script_id: str                    # UUID for tracking/cancellation
+    script: str                       # Multi-line script content
+    interpreter: str = "/bin/bash"    # Script interpreter
+    cwd: str | None = None
+    timeout: int = 3600               # 1 hour default for scripts
+    env: dict[str, str] | None = None  # Additional environment variables
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "script": self.script,
+            "interpreter": self.interpreter,
+            "cwd": self.cwd,
+            "timeout": self.timeout,
+            "env": self.env or {}
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ScriptRequest":
+        return cls(
+            script_id=payload["script_id"],
+            script=payload["script"],
+            interpreter=payload.get("interpreter", "/bin/bash"),
+            cwd=payload.get("cwd"),
+            timeout=payload.get("timeout", 3600),
+            env=payload.get("env")
+        )
+
+
+@dataclass
+class ScriptOutputChunk:
+    """A chunk of streaming output from script execution."""
+    script_id: str
+    stream: str       # "stdout" or "stderr"
+    data: str         # Output chunk (text)
+    sequence: int     # Monotonic sequence number for ordering
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "stream": self.stream,
+            "data": self.data,
+            "sequence": self.sequence
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ScriptOutputChunk":
+        return cls(
+            script_id=payload["script_id"],
+            stream=payload["stream"],
+            data=payload["data"],
+            sequence=payload["sequence"]
+        )
+
+
+@dataclass
+class ScriptCompleteResponse:
+    """Final response when script execution completes."""
+    script_id: str
+    returncode: int
+    success: bool
+    duration_seconds: float
+    total_stdout_bytes: int
+    total_stderr_bytes: int
+    error_message: str | None = None  # Set if execution error (not script error)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "returncode": self.returncode,
+            "success": self.success,
+            "duration_seconds": self.duration_seconds,
+            "total_stdout_bytes": self.total_stdout_bytes,
+            "total_stderr_bytes": self.total_stderr_bytes,
+            "error_message": self.error_message
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ScriptCompleteResponse":
+        return cls(
+            script_id=payload["script_id"],
+            returncode=payload["returncode"],
+            success=payload["success"],
+            duration_seconds=payload["duration_seconds"],
+            total_stdout_bytes=payload["total_stdout_bytes"],
+            total_stderr_bytes=payload["total_stderr_bytes"],
+            error_message=payload.get("error_message")
+        )
+
+
+@dataclass
+class ScriptCancelRequest:
+    """Request to cancel a running script."""
+    script_id: str
+    signal: int = 15  # SIGTERM by default
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "signal": self.signal
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ScriptCancelRequest":
+        return cls(
+            script_id=payload["script_id"],
+            signal=payload.get("signal", 15)
+        )
+
+
+@dataclass
+class ScriptCancelledResponse:
+    """Confirmation that script was cancelled."""
+    script_id: str
+    was_running: bool
+    partial_stdout: str
+    partial_stderr: str
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "was_running": self.was_running,
+            "partial_stdout": self.partial_stdout,
+            "partial_stderr": self.partial_stderr
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ScriptCancelledResponse":
+        return cls(
+            script_id=payload["script_id"],
+            was_running=payload["was_running"],
+            partial_stdout=payload["partial_stdout"],
+            partial_stderr=payload["partial_stderr"]
         )
