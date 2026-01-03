@@ -3,8 +3,8 @@
 import re
 from typing import Any
 
-from .base import BaseSubagent
-from ..script_types import (
+from subagents.base import BaseSubagent
+from script_types import (
     GeneratedScript,
     ScriptReview,
     RiskLevel,

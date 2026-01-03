@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .base import BaseSubagent
-from ..script_types import (
+from subagents.base import BaseSubagent
+from script_types import (
     GeneratedScript,
     ExecutionResult,
     ExecutionStatus,

@@ -3,8 +3,8 @@
 import asyncio
 from typing import Annotated
 
-from .script_types import GeneratedScript, ScriptReview, RiskLevel
-from .subagents import ScriptExecutor, ScriptReviewer
+from script_types import GeneratedScript, ScriptReview, RiskLevel
+from subagents import ScriptExecutor, ScriptReviewer
 
 
 # Global executor instance (initialized on first use)
@@ -110,7 +110,7 @@ def run_shell_script(
         Execution results including stdout, stderr, and status
     """
     # Import here to avoid circular imports
-    from .nlshell import (
+    from nlshell import (
         shell_state,
         REMOTE_MODE,
         SKIP_PERMISSIONS,
@@ -159,15 +159,13 @@ def run_shell_script(
         print("\n\033[1;31m🚫 Script REJECTED due to critical safety issues.\033[0m")
         return "Script rejected: Contains critical safety issues that cannot be executed."
 
+    # Always show the script content
+    display_script_code(script)
+
     # Handle auto-execution mode
     if SKIP_PERMISSIONS:
         print("\033[2m(auto-executing: --dangerously-skip-permissions)\033[0m")
     else:
-        # Ask to view full script
-        view_response = input_no_history("\nView full script? [y/n]: ").lower().strip()
-        if view_response in ("y", "yes"):
-            display_script_code(script)
-
         # Confirmation prompt
         if review.risk_level == RiskLevel.DANGEROUS:
             prompt = "Execute? Type 'EXECUTE' to confirm: "

@@ -147,11 +147,18 @@ SYSTEM_PROMPT = """You are an intelligent shell assistant that helps users execu
 Your primary function is to translate natural language requests into zsh shell commands and execute them.
 
 ## Available Tools:
-1. `run_shell_command` - Execute shell commands (asks user for confirmation)
-2. `read_file` - Read contents of files (README, requirements.txt, setup.py, etc.)
-3. `list_directory` - List files in a directory
-4. `upload_file` - Upload a file from LOCAL machine to REMOTE server (remote mode only)
-5. `download_file` - Download a file from REMOTE server to LOCAL machine (remote mode only)
+1. `run_shell_command` - Execute a SINGLE shell command (asks user for confirmation)
+2. `run_shell_script` - Execute a MULTI-LINE shell script (shows script, asks confirmation)
+3. `read_file` - Read contents of files (README, requirements.txt, setup.py, etc.)
+4. `list_directory` - List files in a directory
+5. `upload_file` - Upload a file from LOCAL machine to REMOTE server (remote mode only)
+6. `download_file` - Download a file from REMOTE server to LOCAL machine (remote mode only)
+
+## When to use run_shell_script vs run_shell_command:
+- Use `run_shell_script` when user asks to "write a script", "create a script", or when task requires multiple commands
+- Use `run_shell_script` for tasks needing variables, loops, conditionals, or error handling
+- Use `run_shell_command` for single, simple commands (ls, pwd, git status, etc.)
+- If in doubt, prefer `run_shell_script` for anything beyond a simple one-liner
 
 ## How to work:
 1. When the user describes what they want to do, determine the appropriate action
@@ -212,11 +219,16 @@ def get_system_prompt() -> str:
     shell_path = SHELL_EXECUTABLE
     prompt = SYSTEM_PROMPT.format(shell_name=shell_name, shell_path=shell_path)
 
-    # Load skills based on active modes
+    # Load skills based on active modes and available tools
     if REMOTE_MODE:
         remote_skill = load_skill("remote")
         if remote_skill:
             prompt += "\n\n" + remote_skill
+
+    if SCRIPT_TOOL_AVAILABLE:
+        scripting_skill = load_skill("scripting")
+        if scripting_skill:
+            prompt += "\n\n" + scripting_skill
 
     return prompt
 
