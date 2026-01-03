@@ -95,13 +95,72 @@ _remote_cwd = None
 
 
 def is_remote_mode() -> bool:
-    """Check if running in remote mode. Use this instead of REMOTE_MODE directly."""
+    """Check if running in remote mode. Use this instead of REMOTE_MODE directly.
+
+    Handles the case where nlshell.py is running as __main__ but importers
+    get a separate copy of the module.
+    """
+    import sys
+    # If nlshell is running as __main__, check __main__'s REMOTE_MODE
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, 'REMOTE_MODE'):
+            return main_module.REMOTE_MODE
     return REMOTE_MODE
 
 
 def get_remote_cwd() -> str | None:
-    """Get the remote working directory."""
+    """Get the remote working directory.
+
+    Handles the case where nlshell.py is running as __main__ but importers
+    get a separate copy of the module.
+    """
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, '_remote_cwd'):
+            return main_module._remote_cwd
     return _remote_cwd
+
+
+def get_remote_port() -> int:
+    """Get the remote port, checking __main__ module first."""
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, 'REMOTE_PORT'):
+            return main_module.REMOTE_PORT
+    return REMOTE_PORT
+
+
+def get_remote_private_key():
+    """Get the remote private key, checking __main__ module first."""
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, 'REMOTE_PRIVATE_KEY'):
+            return main_module.REMOTE_PRIVATE_KEY
+    return REMOTE_PRIVATE_KEY
+
+
+def get_shell_state():
+    """Get the shell state, checking __main__ module first."""
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, 'shell_state'):
+            return main_module.shell_state
+    return shell_state
+
+
+def get_skip_permissions() -> bool:
+    """Get SKIP_PERMISSIONS flag, checking __main__ module first."""
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, 'SKIP_PERMISSIONS'):
+            return main_module.SKIP_PERMISSIONS
+    return SKIP_PERMISSIONS
 
 
 def get_current_directory() -> str:

@@ -109,15 +109,15 @@ def run_shell_script(
     Returns:
         Execution results including stdout, stderr, and status
     """
-    # Import getter functions to access runtime globals
+    # Import getter functions to access runtime globals from __main__
     from nlshell import (
         is_remote_mode,
         get_remote_cwd,
-        shell_state,
-        SKIP_PERMISSIONS,
+        get_remote_port,
+        get_remote_private_key,
+        get_shell_state,
+        get_skip_permissions,
         input_no_history,
-        REMOTE_PORT,
-        REMOTE_PRIVATE_KEY,
     )
 
     # Create a GeneratedScript object for review
@@ -165,7 +165,7 @@ def run_shell_script(
     display_script_code(script)
 
     # Handle auto-execution mode
-    if SKIP_PERMISSIONS:
+    if get_skip_permissions():
         print("\033[2m(auto-executing: --dangerously-skip-permissions)\033[0m")
     else:
         # Confirmation prompt
@@ -192,10 +192,10 @@ def run_shell_script(
     # Get working directory - use getter function for runtime value
     if is_remote_mode():
         cwd = get_remote_cwd()
-        print(f"\n\033[2mExecuting script on remote...\033[0m\n")
+        print(f"\033[2mExecuting script on remote...\033[0m\n")
     else:
-        cwd = str(shell_state.cwd)
-        print(f"\n\033[2mExecuting script...\033[0m\n")
+        cwd = str(get_shell_state().cwd)
+        print(f"\033[2mExecuting script locally...\033[0m\n")
 
     # Output callback for streaming
     def on_output(stream: str, data: str):
@@ -211,8 +211,8 @@ def run_shell_script(
         async def do_remote_execute():
             async with RemoteClient(
                 host="127.0.0.1",  # Always localhost (through SSH tunnel)
-                port=REMOTE_PORT,
-                private_key=REMOTE_PRIVATE_KEY
+                port=get_remote_port(),
+                private_key=get_remote_private_key()
             ) as client:
                 return await client.execute_script(
                     script_id="remote-script",
