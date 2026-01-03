@@ -44,8 +44,11 @@ from shared.protocol import (
     ErrorResponse,
     CacheLookupRequest, CacheLookupResponse,
     CacheStoreExecRequest,
+    ScriptRequest, ScriptOutputChunk, ScriptCompleteResponse,
+    ScriptCancelRequest, ScriptCancelledResponse,
 )
 from command_store import get_command_store
+from script_executor import get_script_executor
 
 # Load environment variables
 load_dotenv()
@@ -255,6 +258,82 @@ async def handle_cache_store_exec(payload: Dict[str, Any]) -> Dict[str, Any]:
     return await handle_command(command_request.to_payload())
 
 
+async def handle_script(websocket: WebSocket, payload: Dict[str, Any]) -> None:
+    """Handle script execution with streaming output.
+
+    This handler is special - it sends multiple messages (streaming output)
+    before the final completion message.
+    """
+    try:
+        request = ScriptRequest.from_payload(payload)
+    except (KeyError, TypeError) as e:
+        await websocket.send_text(json.dumps(
+            send_error(f"Invalid script request: {e}", "INVALID_REQUEST")
+        ))
+        return
+
+    executor = get_script_executor(SHELL_EXECUTABLE)
+
+    # Async callback to send output chunks over WebSocket
+    async def send_output(script_id: str, stream: str, data: str, seq: int):
+        chunk = ScriptOutputChunk(
+            script_id=script_id,
+            stream=stream,
+            data=data,
+            sequence=seq,
+        )
+        await websocket.send_text(json.dumps(
+            send_response(MessageType.SCRIPT_OUTPUT, chunk.to_payload())
+        ))
+
+    # Execute with streaming
+    returncode, duration, stdout_bytes, stderr_bytes, error_msg = await executor.execute_script(
+        script_id=request.script_id,
+        script=request.script,
+        on_output=send_output,
+        cwd=request.cwd,
+        timeout=request.timeout,
+        interpreter=request.interpreter,
+        env=request.env,
+    )
+
+    # Send completion response
+    complete = ScriptCompleteResponse(
+        script_id=request.script_id,
+        returncode=returncode,
+        success=(returncode == 0 and error_msg is None),
+        duration_seconds=duration,
+        total_stdout_bytes=stdout_bytes,
+        total_stderr_bytes=stderr_bytes,
+        error_message=error_msg,
+    )
+    await websocket.send_text(json.dumps(
+        send_response(MessageType.SCRIPT_COMPLETE, complete.to_payload())
+    ))
+
+
+async def handle_script_cancel(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle script cancellation request."""
+    try:
+        request = ScriptCancelRequest.from_payload(payload)
+    except (KeyError, TypeError) as e:
+        return send_error(f"Invalid cancel request: {e}", "INVALID_REQUEST")
+
+    executor = get_script_executor(SHELL_EXECUTABLE)
+    was_running, partial_stdout, partial_stderr = await executor.cancel_script(
+        request.script_id,
+        request.signal,
+    )
+
+    response = ScriptCancelledResponse(
+        script_id=request.script_id,
+        was_running=was_running,
+        partial_stdout=partial_stdout[-10000:],  # Limit partial output
+        partial_stderr=partial_stderr[-10000:],
+    )
+    return send_response(MessageType.SCRIPT_CANCELLED, response.to_payload())
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for nlsh clients."""
@@ -307,6 +386,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 response = await handle_cache_lookup(payload)
             elif msg_type == MessageType.CACHE_STORE_EXEC:
                 response = await handle_cache_store_exec(payload)
+            elif msg_type == MessageType.SCRIPT:
+                # Script execution sends multiple responses (streaming)
+                await handle_script(websocket, payload)
+                continue  # Don't send a single response
+            elif msg_type == MessageType.SCRIPT_CANCEL:
+                response = await handle_script_cancel(payload)
             else:
                 response = send_error(f"Unknown message type: {msg_type}", "UNKNOWN_TYPE")
 

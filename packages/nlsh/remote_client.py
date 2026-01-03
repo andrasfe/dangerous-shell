@@ -21,6 +21,8 @@ from shared.protocol import (
     ErrorResponse,
     CacheLookupRequest, CacheLookupResponse,
     CacheStoreExecRequest,
+    ScriptRequest, ScriptOutputChunk, ScriptCompleteResponse,
+    ScriptCancelRequest, ScriptCancelledResponse,
 )
 
 
@@ -231,6 +233,111 @@ class RemoteClient:
             raise RuntimeError(f"Cache store/exec failed: {error.error} ({error.code})")
 
         return CommandResponse.from_payload(response["payload"])
+
+    async def execute_script(
+        self,
+        script_id: str,
+        script: str,
+        on_output: Any | None = None,  # Callable[[str, str], None]
+        cwd: str | None = None,
+        timeout: int = 3600,
+        interpreter: str = "/bin/bash",
+        env: dict[str, str] | None = None,
+    ) -> ScriptCompleteResponse:
+        """Execute a script with streaming output.
+
+        Args:
+            script_id: Unique identifier for tracking
+            script: The script content
+            on_output: Callback(stream_name, data) for each output chunk
+            cwd: Working directory
+            timeout: Script timeout in seconds
+            interpreter: Script interpreter
+            env: Additional environment variables
+
+        Returns:
+            ScriptCompleteResponse with execution details
+        """
+        if not self._websocket:
+            raise ConnectionError("Not connected to remote server")
+
+        request = ScriptRequest(
+            script_id=script_id,
+            script=script,
+            interpreter=interpreter,
+            cwd=cwd,
+            timeout=timeout,
+            env=env,
+        )
+
+        message = sign_message(
+            self.private_key,
+            MessageType.SCRIPT,
+            request.to_payload()
+        )
+
+        # Send request
+        await self._websocket.send(json.dumps(message))
+
+        # Receive streaming output until completion
+        stdout_buffer: list[str] = []
+        stderr_buffer: list[str] = []
+
+        while True:
+            response_text = await asyncio.wait_for(
+                self._websocket.recv(),
+                timeout=timeout + 60  # Extra time for completion message
+            )
+            response = json.loads(response_text)
+
+            msg_type = response["type"]
+            payload = response["payload"]
+
+            if msg_type == MessageType.SCRIPT_OUTPUT:
+                chunk = ScriptOutputChunk.from_payload(payload)
+                if chunk.stream == "stdout":
+                    stdout_buffer.append(chunk.data)
+                else:
+                    stderr_buffer.append(chunk.data)
+
+                if on_output:
+                    on_output(chunk.stream, chunk.data)
+
+            elif msg_type == MessageType.SCRIPT_COMPLETE:
+                return ScriptCompleteResponse.from_payload(payload)
+
+            elif msg_type == MessageType.ERROR:
+                error = ErrorResponse.from_payload(payload)
+                raise RuntimeError(f"Script execution failed: {error.error} ({error.code})")
+
+    async def cancel_script(
+        self,
+        script_id: str,
+        signal: int = 15,
+    ) -> ScriptCancelledResponse:
+        """Cancel a running script.
+
+        Args:
+            script_id: ID of script to cancel
+            signal: Signal to send (15=SIGTERM, 9=SIGKILL)
+
+        Returns:
+            Cancellation response with partial output
+        """
+        request = ScriptCancelRequest(script_id=script_id, signal=signal)
+        message = sign_message(
+            self.private_key,
+            MessageType.SCRIPT_CANCEL,
+            request.to_payload()
+        )
+
+        response = await self._send_and_receive(message)
+
+        if response["type"] == MessageType.ERROR:
+            error = ErrorResponse.from_payload(response["payload"])
+            raise RuntimeError(f"Cancel failed: {error.error} ({error.code})")
+
+        return ScriptCancelledResponse.from_payload(response["payload"])
 
     async def __aenter__(self):
         """Async context manager entry."""

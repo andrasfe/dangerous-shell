@@ -54,6 +54,13 @@ try:
 except ImportError:
     MEMORY_AVAILABLE = False
 
+# Script tool import (for multi-line script execution)
+try:
+    from script_tool import run_shell_script
+    SCRIPT_TOOL_AVAILABLE = True
+except ImportError:
+    SCRIPT_TOOL_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -1429,9 +1436,14 @@ class NLShell:
         _llm_instance = self.llm
 
         # Create the deep agent with our tools
+        # Build tools list (conditionally include script tool)
+        tools = [run_shell_command, read_file, list_directory, upload_file, download_file]
+        if SCRIPT_TOOL_AVAILABLE:
+            tools.append(run_shell_script)
+
         self.agent = create_deep_agent(
             model=self.llm,
-            tools=[run_shell_command, read_file, list_directory, upload_file, download_file],
+            tools=tools,
             system_prompt=get_system_prompt(),
         )
 
