@@ -187,10 +187,13 @@ def run_shell_script(
             elif response not in ("y", "yes"):
                 return "Script cancelled by user."
 
-    # Execute the script
-    print(f"\n\033[2mExecuting script...\033[0m\n")
-
-    executor = get_executor()
+    # Get working directory
+    if REMOTE_MODE:
+        cwd = _remote_cwd
+        print(f"\n\033[2mExecuting script on remote...\033[0m\n")
+    else:
+        cwd = str(shell_state.cwd)
+        print(f"\n\033[2mExecuting script...\033[0m\n")
 
     # Output callback for streaming
     def on_output(stream: str, data: str):
@@ -199,36 +202,74 @@ def run_shell_script(
         else:
             print(f"\033[1;31m{data}\033[0m", end="")
 
-    # Get working directory
     if REMOTE_MODE:
-        cwd = _remote_cwd
+        # Execute on remote server
+        from remote_client import RemoteClient
+        from nlshell import REMOTE_PORT, REMOTE_PRIVATE_KEY
+
+        async def do_remote_execute():
+            async with RemoteClient(
+                host="127.0.0.1",  # Always localhost (through SSH tunnel)
+                port=REMOTE_PORT,
+                private_key=REMOTE_PRIVATE_KEY
+            ) as client:
+                return await client.execute_script(
+                    script_id="remote-script",
+                    script=script,
+                    on_output=on_output,
+                    cwd=cwd,
+                    timeout=3600,
+                )
+
+        try:
+            response = asyncio.run(do_remote_execute())
+            success = response.success
+            returncode = response.returncode
+            duration = response.duration_seconds
+            error_message = response.error_message
+            # Note: stdout/stderr were already printed via on_output callback
+            stdout = ""
+            stderr = ""
+        except Exception as e:
+            success = False
+            returncode = -1
+            duration = 0.0
+            error_message = str(e)
+            stdout = ""
+            stderr = str(e)
     else:
-        cwd = str(shell_state.cwd)
+        # Execute locally
+        executor = get_executor()
 
-    # Execute
-    async def do_execute():
-        return await executor.execute_script(
-            script_id="local",
-            script_content=script,
-            cwd=cwd,
-            timeout=3600,
-            on_output=on_output,
-            total_steps=len(steps),
-        )
+        async def do_execute():
+            return await executor.execute_script(
+                script_id="local",
+                script_content=script,
+                cwd=cwd,
+                timeout=3600,
+                on_output=on_output,
+                total_steps=len(steps),
+            )
 
-    result = asyncio.run(do_execute())
+        result = asyncio.run(do_execute())
+        success = result.success
+        returncode = result.returncode
+        duration = result.duration_seconds
+        error_message = result.error_message
+        stdout = result.stdout
+        stderr = result.stderr
 
     # Report result
-    if result.success:
+    if success:
         print(f"\n\033[1;32m✓ Script completed successfully\033[0m")
-        print(f"\033[2m  Duration: {result.duration_seconds:.1f}s\033[0m")
-        return f"Script executed successfully.\nOutput:\n{result.stdout}"
+        print(f"\033[2m  Duration: {duration:.1f}s\033[0m")
+        return f"Script executed successfully.\nOutput:\n{stdout}"
     else:
-        print(f"\n\033[1;31m✗ Script failed with exit code {result.returncode}\033[0m")
-        if result.error_message:
-            print(f"\033[1;31m  {result.error_message}\033[0m")
+        print(f"\n\033[1;31m✗ Script failed with exit code {returncode}\033[0m")
+        if error_message:
+            print(f"\033[1;31m  {error_message}\033[0m")
         return (
-            f"Script failed with exit code {result.returncode}.\n"
-            f"Stdout:\n{result.stdout}\n"
-            f"Stderr:\n{result.stderr}"
+            f"Script failed with exit code {returncode}.\n"
+            f"Stdout:\n{stdout}\n"
+            f"Stderr:\n{stderr}"
         )
