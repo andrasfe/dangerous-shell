@@ -92,8 +92,9 @@ SKIP_PERMISSIONS = False  # --dangerously-skip-permissions
 REMOTE_MODE = False  # --remote
 DIRECT_MODE = False  # --direct (no LLM, can be toggled at runtime)
 
-# Global remote client (initialized when --remote is used)
-_remote_client = None
+# Global remote session (initialized when --remote is used)
+# This is a persistent WebSocket connection for the entire session
+_remote_session: "RemoteSession | None" = None
 
 # Remote working directory (separate from local cwd)
 _remote_cwd = None
@@ -166,6 +167,16 @@ def get_skip_permissions() -> bool:
         if hasattr(main_module, 'SKIP_PERMISSIONS'):
             return main_module.SKIP_PERMISSIONS
     return SKIP_PERMISSIONS
+
+
+def get_remote_session():
+    """Get the remote session, checking __main__ module first."""
+    import sys
+    if '__main__' in sys.modules:
+        main_module = sys.modules['__main__']
+        if hasattr(main_module, '_remote_session'):
+            return main_module._remote_session
+    return _remote_session
 
 
 def get_current_directory() -> str:
@@ -813,7 +824,7 @@ def has_stderr_errors(stderr: str) -> bool:
 
 
 def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, str, str, int]:
-    """Execute a command on the remote server.
+    """Execute a command on the remote server using persistent connection.
 
     Args:
         command: The command to execute
@@ -822,20 +833,12 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
     Returns:
         Tuple of (success, stdout, stderr, returncode)
     """
-    if not REMOTE_AVAILABLE or _remote_client is None:
-        return False, "", "Remote client not available", -1
-
-    async def _run():
-        async with RemoteClient(
-            host="127.0.0.1",  # Always localhost (through SSH tunnel)
-            port=REMOTE_PORT,
-            private_key=REMOTE_PRIVATE_KEY
-        ) as client:
-            result = await client.execute_command(command, cwd=cwd)
-            return result.success, result.stdout, result.stderr, result.returncode
+    session = get_remote_session()
+    if not REMOTE_AVAILABLE or session is None:
+        return False, "", "Remote session not available", -1
 
     try:
-        return asyncio.run(_run())
+        return session.execute_command(command, cwd=cwd)
     except Exception as e:
         return False, "", str(e), -1
 
@@ -2023,8 +2026,20 @@ def main():
             sys.exit(1)
 
         REMOTE_MODE = True
-        _remote_client = True  # Flag that remote is configured
-        print(f"\033[1;35m🌐 Remote mode: via SSH tunnel (localhost:{REMOTE_PORT})\033[0m")
+
+        # Initialize persistent remote session
+        from remote_client import RemoteSession
+        _remote_session = RemoteSession(
+            host="127.0.0.1",
+            port=REMOTE_PORT,
+            private_key=REMOTE_PRIVATE_KEY
+        )
+        try:
+            _remote_session.start()
+            print(f"\033[1;35m🌐 Remote mode: via SSH tunnel (localhost:{REMOTE_PORT})\033[0m")
+        except Exception as e:
+            print(f"\033[1;31mError: Failed to connect to remote: {e}\033[0m")
+            sys.exit(1)
         print()
 
     # Handle inline execution mode
@@ -2053,15 +2068,26 @@ def main():
             if stderr:
                 print(f"\033[1;31m{stderr}\033[0m", end="" if stderr.endswith("\n") else "\n")
 
+            # Clean shutdown for inline mode
+            if _remote_session:
+                _remote_session.stop()
             sys.exit(0 if returncode == 0 else returncode)
         else:
             # Use LLM to process the natural language request
             shell = NLShell()
             shell.process_input(command)
+            # Clean shutdown for inline mode
+            if _remote_session:
+                _remote_session.stop()
             sys.exit(0)
 
     shell = NLShell()
-    shell.run()
+    try:
+        shell.run()
+    finally:
+        # Clean shutdown of persistent remote session
+        if _remote_session:
+            _remote_session.stop()
 
 
 if __name__ == "__main__":

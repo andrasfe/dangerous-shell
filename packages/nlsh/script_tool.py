@@ -206,25 +206,21 @@ def run_shell_script(
             print(f"\033[1;31m{data}\033[0m", end="")
 
     if is_remote_mode():
-        # Execute on remote server
-        from remote_client import RemoteClient
+        # Execute on remote server using persistent session
+        from nlshell import get_remote_session
 
-        async def do_remote_execute():
-            async with RemoteClient(
-                host="127.0.0.1",  # Always localhost (through SSH tunnel)
-                port=get_remote_port(),
-                private_key=get_remote_private_key()
-            ) as client:
-                return await client.execute_script(
-                    script_id="remote-script",
-                    script=script,
-                    on_output=on_output,
-                    cwd=cwd,
-                    timeout=3600,
-                )
+        session = get_remote_session()
+        if session is None:
+            return "Error: Remote session not available"
 
         try:
-            response = asyncio.run(do_remote_execute())
+            response = session.execute_script(
+                script_id="remote-script",
+                script=script,
+                on_output=on_output,
+                cwd=cwd,
+                timeout=3600,
+            )
             success = response.success
             returncode = response.returncode
             duration = response.duration_seconds

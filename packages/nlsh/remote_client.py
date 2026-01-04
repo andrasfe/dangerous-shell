@@ -360,3 +360,304 @@ def create_client_from_env() -> RemoteClient:
 
     private_key = load_private_key(private_key_path)
     return RemoteClient(host=host, port=int(port), private_key=private_key)
+
+
+class PersistentRemoteConnection:
+    """Manages a persistent WebSocket connection for the entire session.
+
+    Features:
+    - Single connection reused for all commands
+    - Automatic reconnection on connection loss
+    - Background ping to keep connection alive
+    - Thread-safe for use from synchronous code
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        private_key: SigningKey,
+        ping_interval: float = 30.0,
+        reconnect_delay: float = 1.0,
+        max_reconnect_attempts: int = 5
+    ):
+        self.host = host
+        self.port = port
+        self.private_key = private_key
+        self.ping_interval = ping_interval
+        self.reconnect_delay = reconnect_delay
+        self.max_reconnect_attempts = max_reconnect_attempts
+
+        self._client: RemoteClient | None = None
+        self._connected = False
+        self._lock = asyncio.Lock()
+        self._ping_task: asyncio.Task | None = None
+
+    async def connect(self) -> bool:
+        """Establish the persistent connection."""
+        async with self._lock:
+            if self._connected and self._client:
+                return True
+
+            self._client = RemoteClient(
+                host=self.host,
+                port=self.port,
+                private_key=self.private_key
+            )
+            await self._client.connect()
+            self._connected = True
+            self._start_ping_loop()
+            return True
+
+    def _start_ping_loop(self):
+        """Start background ping task."""
+        if self._ping_task and not self._ping_task.done():
+            self._ping_task.cancel()
+        self._ping_task = asyncio.create_task(self._ping_loop())
+
+    async def _ping_loop(self):
+        """Background keepalive task."""
+        while self._connected:
+            try:
+                await asyncio.sleep(self.ping_interval)
+                if self._client and self._connected:
+                    await self._client.ping()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                self._connected = False
+                break
+
+    async def ensure_connected(self) -> RemoteClient:
+        """Get client, reconnecting if needed."""
+        async with self._lock:
+            if self._client and self._connected:
+                try:
+                    await asyncio.wait_for(self._client.ping(), timeout=5.0)
+                    return self._client
+                except Exception:
+                    self._connected = False
+
+            return await self._reconnect()
+
+    async def _reconnect(self) -> RemoteClient:
+        """Attempt to reconnect with exponential backoff."""
+        delay = self.reconnect_delay
+        for attempt in range(self.max_reconnect_attempts):
+            try:
+                print(f"\033[2m(reconnecting to remote, attempt {attempt + 1}...)\033[0m")
+
+                if self._client:
+                    try:
+                        await self._client.disconnect()
+                    except Exception:
+                        pass
+
+                self._client = RemoteClient(
+                    host=self.host,
+                    port=self.port,
+                    private_key=self.private_key
+                )
+                await self._client.connect()
+                self._connected = True
+                self._start_ping_loop()
+                print(f"\033[2m(reconnected)\033[0m")
+                return self._client
+            except Exception as e:
+                if attempt < self.max_reconnect_attempts - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+
+        raise ConnectionError("Failed to reconnect after max attempts")
+
+    async def disconnect(self):
+        """Clean shutdown."""
+        self._connected = False
+        if self._ping_task:
+            self._ping_task.cancel()
+            try:
+                await self._ping_task
+            except asyncio.CancelledError:
+                pass
+        if self._client:
+            await self._client.disconnect()
+            self._client = None
+
+    async def execute_command(
+        self,
+        command: str,
+        cwd: str | None = None,
+        timeout: int = 300
+    ) -> CommandResponse:
+        """Execute command using persistent connection."""
+        client = await self.ensure_connected()
+        return await client.execute_command(command, cwd=cwd, timeout=timeout)
+
+    async def upload_file(
+        self,
+        local_path: str | Path,
+        remote_path: str,
+        mode: str = "0644"
+    ) -> UploadResponse:
+        """Upload file using persistent connection."""
+        client = await self.ensure_connected()
+        return await client.upload_file(local_path, remote_path, mode)
+
+    async def download_file(
+        self,
+        remote_path: str,
+        local_path: str | Path | None = None
+    ) -> tuple[bytes, DownloadResponse]:
+        """Download file using persistent connection."""
+        client = await self.ensure_connected()
+        return await client.download_file(remote_path, local_path)
+
+    async def execute_script(
+        self,
+        script_id: str,
+        script: str,
+        on_output: Any | None = None,
+        cwd: str | None = None,
+        timeout: int = 3600,
+        interpreter: str = "/bin/bash",
+        env: dict[str, str] | None = None,
+    ) -> ScriptCompleteResponse:
+        """Execute script with streaming output using persistent connection."""
+        client = await self.ensure_connected()
+        return await client.execute_script(
+            script_id=script_id,
+            script=script,
+            on_output=on_output,
+            cwd=cwd,
+            timeout=timeout,
+            interpreter=interpreter,
+            env=env,
+        )
+
+
+import threading
+
+
+class RemoteSession:
+    """Synchronous interface to persistent remote connection.
+
+    Runs the async event loop in a background thread, providing
+    synchronous methods for use in the main shell loop.
+    """
+
+    def __init__(self, host: str, port: int, private_key: SigningKey):
+        self._connection = PersistentRemoteConnection(host, port, private_key)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._started = False
+
+    def start(self, timeout: float = 30.0):
+        """Start the background event loop and connect."""
+        if self._started:
+            return
+
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._loop_thread.start()
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._connection.connect(), self._loop
+        )
+        future.result(timeout=timeout)
+        self._started = True
+
+    def _run_loop(self):
+        """Run event loop in background thread."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_async(self, coro, timeout: float = 300.0):
+        """Run an async coroutine from sync code."""
+        if not self._loop or not self._started:
+            raise ConnectionError("Remote session not started")
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=timeout)
+
+    def execute_command(
+        self,
+        command: str,
+        cwd: str | None = None,
+        timeout: int = 300
+    ) -> tuple[bool, str, str, int]:
+        """Execute command synchronously using persistent connection."""
+        response = self._run_async(
+            self._connection.execute_command(command, cwd=cwd, timeout=timeout),
+            timeout=timeout + 10
+        )
+        return response.success, response.stdout, response.stderr, response.returncode
+
+    def upload_file(
+        self,
+        local_path: str | Path,
+        remote_path: str,
+        mode: str = "0644"
+    ) -> UploadResponse:
+        """Upload file using persistent connection."""
+        return self._run_async(
+            self._connection.upload_file(local_path, remote_path, mode)
+        )
+
+    def download_file(
+        self,
+        remote_path: str,
+        local_path: str | Path | None = None
+    ) -> tuple[bytes, DownloadResponse]:
+        """Download file using persistent connection."""
+        return self._run_async(
+            self._connection.download_file(remote_path, local_path)
+        )
+
+    def execute_script(
+        self,
+        script_id: str,
+        script: str,
+        on_output: Any | None = None,
+        cwd: str | None = None,
+        timeout: int = 3600,
+        interpreter: str = "/bin/bash",
+        env: dict[str, str] | None = None,
+    ) -> ScriptCompleteResponse:
+        """Execute script with streaming output."""
+        return self._run_async(
+            self._connection.execute_script(
+                script_id=script_id,
+                script=script,
+                on_output=on_output,
+                cwd=cwd,
+                timeout=timeout,
+                interpreter=interpreter,
+                env=env,
+            ),
+            timeout=timeout + 60
+        )
+
+    def stop(self):
+        """Clean shutdown of connection and event loop."""
+        if not self._started:
+            return
+
+        if self._loop:
+            future = asyncio.run_coroutine_threadsafe(
+                self._connection.disconnect(), self._loop
+            )
+            try:
+                future.result(timeout=5.0)
+            except Exception:
+                pass
+
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+        if self._loop_thread:
+            self._loop_thread.join(timeout=2.0)
+
+        self._started = False
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if session is connected."""
+        return self._started and self._connection._connected
