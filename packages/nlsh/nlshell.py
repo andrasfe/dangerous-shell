@@ -59,6 +59,21 @@ try:
 except ImportError:
     SCRIPT_TOOL_AVAILABLE = False
 
+# Async interpretation worker import
+try:
+    import queue
+    import uuid
+    from interpretation_worker import (
+        InterpretationWorker,
+        InterpretationRequest as WorkerRequest,
+        InterpretationResult as WorkerResult,
+        RequestPriority,
+        create_request,
+    )
+    INTERPRETATION_WORKER_AVAILABLE = True
+except ImportError:
+    INTERPRETATION_WORKER_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -98,6 +113,9 @@ _remote_session: "RemoteSession | None" = None
 
 # Remote working directory (separate from local cwd)
 _remote_cwd = None
+
+# Global NLShell instance (for access from run_shell_command tool)
+_nlshell_instance: "NLShell | None" = None
 
 
 def is_remote_mode() -> bool:
@@ -1116,6 +1134,39 @@ def run_shell_command(
                         shell_state.skip_llm_response = True
                         return "Command executed successfully. User declined follow-up. Do NOT suggest any more commands - wait for new user input."
 
+                # Enqueue for async interpretation if worker is available
+                if INTERPRETATION_WORKER_AVAILABLE:
+                    # Import here to avoid circular import issues
+                    import sys
+                    main_module = sys.modules.get('__main__')
+                    nlshell_instance = getattr(main_module, '_nlshell_instance', None) if main_module else None
+
+                    # Also check module-level NLShell instances
+                    if nlshell_instance is None:
+                        # Try to find the NLShell instance from the current context
+                        for obj in globals().values():
+                            if isinstance(obj, type) and obj.__name__ == 'NLShell':
+                                break
+
+                    # If we have a worker, enqueue the output
+                    worker = getattr(nlshell_instance, '_interpretation_worker', None) if nlshell_instance else None
+                    if worker and worker.is_running and full_output:
+                        request = create_request(
+                            request_id=str(uuid.uuid4()),
+                            command=current_cmd,
+                            output=full_output,
+                            priority=RequestPriority.NORMAL,
+                            context={
+                                "natural_request": natural_request or shell_state.current_request,
+                                "cwd": str(_remote_cwd if REMOTE_MODE else shell_state.cwd),
+                                "is_remote": REMOTE_MODE,
+                            },
+                        )
+                        if worker.enqueue(request):
+                            # Successfully enqueued - skip LLM response
+                            shell_state.skip_llm_response = True
+                            return "Command executed successfully. Output queued for async interpretation."
+
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
             # Command failed
@@ -1465,6 +1516,47 @@ class NLShell:
         global _llm_instance
         _llm_instance = self.llm
 
+        # Initialize async interpretation worker for background output analysis
+        self._interpretation_worker: "InterpretationWorker | None" = None
+        if INTERPRETATION_WORKER_AVAILABLE:
+            # Create the async interpret function that uses the LLM
+            async def interpret_output(command: str, output: str, context: dict) -> str:
+                """Interpret command output using the LLM."""
+                import asyncio
+                max_output = 2000
+                truncated = output[:max_output] + "\n...(truncated)" if len(output) > max_output else output
+
+                natural_request = context.get("natural_request", "")
+                cwd = context.get("cwd", "")
+                is_remote = context.get("is_remote", False)
+
+                prompt = f"""Briefly analyze this command result (1-2 sentences max).
+
+User request: {natural_request}
+Command: {command}
+Directory: {cwd}
+{"Mode: REMOTE" if is_remote else "Mode: LOCAL"}
+
+Output:
+{truncated}
+
+Be concise. Focus on whether the command succeeded and key findings."""
+
+                # Run LLM call in executor since it's sync
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.llm.invoke(prompt)
+                )
+                return response.content.strip()
+
+            self._interpretation_worker = InterpretationWorker(
+                interpret_fn=interpret_output,
+                timeout=30.0,
+                max_retries=2,
+            )
+            self._interpretation_worker.start()
+
         # Create the deep agent with our tools
         # Build tools list (conditionally include script tool)
         tools = [run_shell_command, read_file, list_directory, upload_file, download_file]
@@ -1478,6 +1570,10 @@ class NLShell:
         )
 
         self._setup_readline()
+
+        # Set global instance for access from run_shell_command tool
+        global _nlshell_instance
+        _nlshell_instance = self
 
     def _get_history_file(self) -> Path:
         """Get the appropriate history file based on mode."""
@@ -1500,6 +1596,42 @@ class NLShell:
             readline.write_history_file(self._get_history_file())
         except Exception:
             pass
+
+    def _display_pending_commentary(self, max_count: int = 5) -> int:
+        """Display any pending async interpretation results.
+
+        Called before the prompt to show commentary from background interpretation.
+
+        Args:
+            max_count: Maximum number of results to display per call.
+
+        Returns:
+            Number of results displayed.
+        """
+        if not self._interpretation_worker:
+            return 0
+
+        displayed = 0
+        while displayed < max_count:
+            result = self._interpretation_worker.get_result(block=False)
+            if result is None:
+                break
+
+            # Display the interpretation result
+            if result.success and result.interpretation:
+                print(f"\n\033[1;36m[Analysis]\033[0m {result.interpretation}")
+            elif result.error_message:
+                print(f"\n\033[2m[Analysis failed: {result.error_message}]\033[0m")
+
+            displayed += 1
+
+        return displayed
+
+    def _has_pending_commentary(self) -> bool:
+        """Check if there is pending commentary to display."""
+        if not self._interpretation_worker:
+            return False
+        return self._interpretation_worker.has_pending_results()
 
     def _execute_direct(self, command: str):
         """Execute a command directly without LLM."""
@@ -1910,6 +2042,9 @@ Provide a brief, helpful response summarizing the result for the user. Be concis
                     if _remote_session.has_pending_notifications():
                         _remote_session.process_notifications()
 
+                # Display any pending async interpretation commentary
+                self._display_pending_commentary()
+
                 try:
                     user_input = input(self.get_prompt()).strip()
                 except EOFError:
@@ -2060,6 +2195,9 @@ Provide a brief, helpful response summarizing the result for the user. Be concis
 
         finally:
             self._save_history()
+            # Stop async interpretation worker
+            if self._interpretation_worker:
+                self._interpretation_worker.stop()
 
 
 def main():
@@ -2171,16 +2309,23 @@ def main():
         else:
             # Use LLM to process the natural language request
             shell = NLShell()
-            shell.process_input(command)
-            # Clean shutdown for inline mode
-            if _remote_session:
-                _remote_session.stop()
+            try:
+                shell.process_input(command)
+            finally:
+                # Clean shutdown for inline mode
+                if shell._interpretation_worker:
+                    shell._interpretation_worker.stop()
+                if _remote_session:
+                    _remote_session.stop()
             sys.exit(0)
 
     shell = NLShell()
     try:
         shell.run()
     finally:
+        # Clean shutdown of async interpretation worker
+        if shell._interpretation_worker:
+            shell._interpretation_worker.stop()
         # Clean shutdown of persistent remote session
         if _remote_session:
             _remote_session.stop()
