@@ -1997,13 +1997,14 @@ def main():
     args = parser.parse_args()
 
     if args.dangerously_skip_permissions:
+        global SKIP_PERMISSIONS
         SKIP_PERMISSIONS = True
         print("\033[1;31m⚠️  WARNING: Running with --dangerously-skip-permissions\033[0m")
         print("\033[1;31m⚠️  All commands will be executed WITHOUT confirmation!\033[0m")
         print()
 
     if args.remote:
-        global REMOTE_PRIVATE_KEY
+        global REMOTE_PRIVATE_KEY, REMOTE_MODE, _remote_session
 
         if not REMOTE_AVAILABLE:
             print("\033[1;31mError: Remote execution not available. Check remote_client.py import.\033[0m")
