@@ -173,8 +173,10 @@ def run_shell_script(
             prompt = "Execute? Type 'EXECUTE' to confirm: "
             response = input_no_history(prompt).strip()
             if response != "EXECUTE":
+                get_shell_state().skip_llm_response = True
                 return "Script cancelled by user."
         elif review.risk_level == RiskLevel.CRITICAL:
+            get_shell_state().skip_llm_response = True
             return "Script rejected: Critical safety issues found."
         else:
             prompt = "Execute? [y/n/e(dit)/f(eedback)]: "
@@ -185,8 +187,10 @@ def run_shell_script(
                 return f"User feedback on script: {feedback}. Please modify the script accordingly."
             elif response == "e":
                 print("Script editing not yet implemented. Please provide feedback instead.")
+                get_shell_state().skip_llm_response = True
                 return "Script cancelled by user."
             elif response not in ("y", "yes"):
+                get_shell_state().skip_llm_response = True
                 return "Script cancelled by user."
 
     # Get working directory - use getter function for runtime value

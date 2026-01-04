@@ -920,6 +920,7 @@ def run_shell_command(
         if should_execute == "feedback":
             return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
         if not should_execute or final_command is None:
+            shell_state.skip_llm_response = True
             return "Command cancelled by user."
 
         if REMOTE_MODE:
@@ -979,6 +980,7 @@ def run_shell_command(
         return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
 
     if not should_execute or final_command is None:
+        shell_state.skip_llm_response = True
         return "Command cancelled by user."
 
     # Check if command requires interactive mode (for passwords) - not supported in remote mode
