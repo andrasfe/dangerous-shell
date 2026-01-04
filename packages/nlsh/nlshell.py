@@ -1746,7 +1746,11 @@ Respond conversationally. Be concise but helpful."""
                     print(f"\n\033[1;37m{content}\033[0m")
 
         except CommandCancelled:
-            # User cancelled - return immediately without any LLM call
+            # User cancelled - clean up and return immediately without any LLM call
+            # Remove the user message we added since there's no response
+            if shell_state.conversation_history and shell_state.conversation_history[-1]["role"] == "user":
+                shell_state.conversation_history.pop()
+            shell_state.current_request = ""
             print("\033[2mCancelled.\033[0m")
             return
         except Exception as e:
