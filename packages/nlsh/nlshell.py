@@ -1779,6 +1779,87 @@ Provide a brief, helpful response summarizing the result for the user. Be concis
         except Exception as e:
             print(f"\033[1;31mError: {e}\033[0m")
 
+    def _register_default_push_handlers(self):
+        """Register default handlers for server-push messages."""
+        from remote_client import ServerPushMessage, MessageType
+
+        def handle_notification(msg: ServerPushMessage):
+            """Handle general notifications from server."""
+            payload = msg.payload
+            level = payload.get("level", "info")
+            title = payload.get("title", "")
+            message = payload.get("message", "")
+
+            level_colors = {
+                "info": "\033[1;36m",
+                "warning": "\033[1;33m",
+                "error": "\033[1;31m",
+            }
+            color = level_colors.get(level, "\033[0m")
+            print(f"\n{color}[{level.upper()}] {title}\033[0m")
+            if message:
+                print(f"  {message}")
+
+        def handle_task_status(msg: ServerPushMessage):
+            """Handle task status updates."""
+            payload = msg.payload
+            task_id = payload.get("task_id", "unknown")
+            status = payload.get("status", "unknown")
+            progress = payload.get("progress", 0.0)
+            message = payload.get("message", "")
+
+            status_colors = {
+                "running": "\033[1;33m",
+                "completed": "\033[1;32m",
+                "failed": "\033[1;31m",
+                "cancelled": "\033[1;35m",
+            }
+            color = status_colors.get(status, "\033[0m")
+            progress_pct = int(progress * 100)
+            print(f"\n{color}[Task {task_id[:8]}] {status.upper()} ({progress_pct}%)\033[0m")
+            if message:
+                print(f"  {message}")
+
+        def handle_job_complete(msg: ServerPushMessage):
+            """Handle job completion notifications."""
+            payload = msg.payload
+            job_id = payload.get("job_id", "unknown")
+            success = payload.get("success", False)
+            result = payload.get("result_summary", "")
+            duration = payload.get("duration_seconds", 0.0)
+
+            if success:
+                print(f"\n\033[1;32m[Job Complete] {job_id}: {result} ({duration:.1f}s)\033[0m")
+            else:
+                print(f"\n\033[1;31m[Job Failed] {job_id}: {result} ({duration:.1f}s)\033[0m")
+
+        def handle_prompt(msg: ServerPushMessage):
+            """Handle server-initiated prompts."""
+            payload = msg.payload
+            question = payload.get("question", "")
+            options = payload.get("options", [])
+
+            print(f"\n\033[1;35m[Server Prompt] {question}\033[0m")
+            if options:
+                print(f"  Options: {', '.join(options)}")
+
+        def handle_resource_alert(msg: ServerPushMessage):
+            """Handle resource alerts (disk full, etc.)."""
+            payload = msg.payload
+            resource = payload.get("resource_type", "unknown")
+            severity = payload.get("severity", "warning")
+            message = payload.get("message", "")
+
+            color = "\033[1;31m" if severity == "critical" else "\033[1;33m"
+            print(f"\n{color}[Resource Alert: {resource}] {message}\033[0m")
+
+        # Register all handlers
+        _remote_session.register_push_handler(MessageType.PUSH_NOTIFICATION, handle_notification)
+        _remote_session.register_push_handler(MessageType.PUSH_TASK_STATUS, handle_task_status)
+        _remote_session.register_push_handler(MessageType.PUSH_JOB_COMPLETE, handle_job_complete)
+        _remote_session.register_push_handler(MessageType.PUSH_PROMPT, handle_prompt)
+        _remote_session.register_push_handler(MessageType.PUSH_RESOURCE_ALERT, handle_resource_alert)
+
     def run(self):
         """Main shell loop."""
         history_count = len(load_recent_history())
@@ -1816,14 +1897,28 @@ Provide a brief, helpful response summarizing the result for the user. Be concis
             except Exception as e:
                 print(f"\033[1;33mWarning: Could not initialize remote cwd: {e}\033[0m")
 
+        # Register default push handlers for remote mode
+        if REMOTE_MODE and _remote_session:
+            self._register_default_push_handlers()
+
         try:
             while True:
                 print()  # Newline before prompt (outside readline)
+
+                # Process any pending server-push notifications
+                if REMOTE_MODE and _remote_session:
+                    if _remote_session.has_pending_notifications():
+                        _remote_session.process_notifications()
+
                 try:
                     user_input = input(self.get_prompt()).strip()
                 except EOFError:
                     print("\nGoodbye!")
                     break
+
+                # Process notifications after input as well
+                if REMOTE_MODE and _remote_session:
+                    _remote_session.process_notifications()
 
                 if not user_input:
                     continue

@@ -26,6 +26,14 @@ class MessageType(str, Enum):
     SCRIPT_COMPLETE = "script_complete"    # Script execution completed
     SCRIPT_CANCEL = "script_cancel"        # Cancel a running script
     SCRIPT_CANCELLED = "script_cancelled"  # Confirmation of cancellation
+    # Server-push message types (server-initiated, full duplex)
+    PUSH_TASK_STATUS = "push_task_status"       # Background task status update
+    PUSH_JOB_COMPLETE = "push_job_complete"     # Async job completion notification
+    PUSH_PROMPT = "push_prompt"                 # Server-initiated prompt/question
+    PUSH_NOTIFICATION = "push_notification"     # General notification
+    PUSH_HEARTBEAT = "push_heartbeat"           # Server health/status broadcast
+    PUSH_SCRIPT_PROGRESS = "push_script_progress"  # Progress update for long scripts
+    PUSH_RESOURCE_ALERT = "push_resource_alert"    # Resource warnings (disk full, etc.)
 
 
 @dataclass
@@ -393,4 +401,205 @@ class ScriptCancelledResponse:
             was_running=payload["was_running"],
             partial_stdout=payload["partial_stdout"],
             partial_stderr=payload["partial_stderr"]
+        )
+
+
+# ============================================================================
+# Server-Push Protocol Messages (Full Duplex)
+# ============================================================================
+
+@dataclass
+class PushTaskStatus:
+    """Status update for a background task."""
+    task_id: str
+    status: str           # "running", "completed", "failed", "cancelled"
+    progress: float       # 0.0 to 1.0
+    message: str | None   # Human-readable status message
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "status": self.status,
+            "progress": self.progress,
+            "message": self.message
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushTaskStatus":
+        return cls(
+            task_id=payload["task_id"],
+            status=payload["status"],
+            progress=payload.get("progress", 0.0),
+            message=payload.get("message")
+        )
+
+
+@dataclass
+class PushJobComplete:
+    """Notification that an async job has finished."""
+    job_id: str
+    success: bool
+    result_summary: str
+    duration_seconds: float
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "success": self.success,
+            "result_summary": self.result_summary,
+            "duration_seconds": self.duration_seconds
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushJobComplete":
+        return cls(
+            job_id=payload["job_id"],
+            success=payload["success"],
+            result_summary=payload.get("result_summary", ""),
+            duration_seconds=payload.get("duration_seconds", 0.0)
+        )
+
+
+@dataclass
+class PushPrompt:
+    """Server-initiated prompt requiring user response."""
+    prompt_id: str
+    question: str
+    options: list[str] | None   # e.g., ["yes", "no", "cancel"]
+    timeout_seconds: int | None  # Optional timeout
+    context: dict[str, Any] | None  # Additional context for display
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "prompt_id": self.prompt_id,
+            "question": self.question,
+            "options": self.options,
+            "timeout_seconds": self.timeout_seconds,
+            "context": self.context
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushPrompt":
+        return cls(
+            prompt_id=payload["prompt_id"],
+            question=payload["question"],
+            options=payload.get("options"),
+            timeout_seconds=payload.get("timeout_seconds"),
+            context=payload.get("context")
+        )
+
+
+@dataclass
+class PushNotification:
+    """General notification from server."""
+    notification_id: str
+    level: str            # "info", "warning", "error"
+    title: str
+    message: str
+    dismissable: bool = True
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "notification_id": self.notification_id,
+            "level": self.level,
+            "title": self.title,
+            "message": self.message,
+            "dismissable": self.dismissable
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushNotification":
+        return cls(
+            notification_id=payload["notification_id"],
+            level=payload.get("level", "info"),
+            title=payload.get("title", ""),
+            message=payload.get("message", ""),
+            dismissable=payload.get("dismissable", True)
+        )
+
+
+@dataclass
+class PushHeartbeat:
+    """Server health/status broadcast."""
+    server_time: float          # Unix timestamp
+    uptime_seconds: float
+    connected_clients: int
+    load_average: float | None  # System load
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "server_time": self.server_time,
+            "uptime_seconds": self.uptime_seconds,
+            "connected_clients": self.connected_clients,
+            "load_average": self.load_average
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushHeartbeat":
+        return cls(
+            server_time=payload["server_time"],
+            uptime_seconds=payload.get("uptime_seconds", 0.0),
+            connected_clients=payload.get("connected_clients", 0),
+            load_average=payload.get("load_average")
+        )
+
+
+@dataclass
+class PushScriptProgress:
+    """Progress update for long-running scripts."""
+    script_id: str
+    step: int             # Current step number
+    total_steps: int      # Total steps
+    step_name: str        # Current step description
+    elapsed_seconds: float
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "step": self.step,
+            "total_steps": self.total_steps,
+            "step_name": self.step_name,
+            "elapsed_seconds": self.elapsed_seconds
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushScriptProgress":
+        return cls(
+            script_id=payload["script_id"],
+            step=payload.get("step", 0),
+            total_steps=payload.get("total_steps", 0),
+            step_name=payload.get("step_name", ""),
+            elapsed_seconds=payload.get("elapsed_seconds", 0.0)
+        )
+
+
+@dataclass
+class PushResourceAlert:
+    """Resource warning (disk full, memory low, etc.)."""
+    alert_id: str
+    resource_type: str    # "disk", "memory", "cpu", "network"
+    severity: str         # "warning", "critical"
+    current_value: float  # Current usage (e.g., 0.95 for 95%)
+    threshold: float      # Threshold that triggered alert
+    message: str
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "alert_id": self.alert_id,
+            "resource_type": self.resource_type,
+            "severity": self.severity,
+            "current_value": self.current_value,
+            "threshold": self.threshold,
+            "message": self.message
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "PushResourceAlert":
+        return cls(
+            alert_id=payload["alert_id"],
+            resource_type=payload.get("resource_type", "unknown"),
+            severity=payload.get("severity", "warning"),
+            current_value=payload.get("current_value", 0.0),
+            threshold=payload.get("threshold", 0.0),
+            message=payload.get("message", "")
         )
