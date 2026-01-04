@@ -1637,15 +1637,17 @@ Respond conversationally. Be concise but helpful."""
         except Exception as e:
             print(f"\n\033[1;31mError: {e}\033[0m")
 
-    def _execute_cached_command(self, cache_hit: "CacheHit", user_input: str) -> bool:
-        """Execute a cached command (skipping LLM).
+    def _execute_cached_command(self, cache_hit: "CacheHit", user_input: str) -> tuple[bool, str | None]:
+        """Execute a cached command (skipping LLM for command generation).
 
         Args:
             cache_hit: The cache hit with command and explanation.
             user_input: Original user request (for logging).
 
         Returns:
-            True if command was executed, False if user cancelled.
+            Tuple of (executed, output_for_llm):
+            - executed: True if command was executed, False if user cancelled
+            - output_for_llm: Combined output string for LLM to respond to, or None if cancelled
         """
         global _remote_cwd
 
@@ -1663,7 +1665,7 @@ Respond conversationally. Be concise but helpful."""
 
         if response in ("n", "no"):
             print("\033[2mCancelled.\033[0m")
-            return False
+            return False, None
 
         command = cache_hit.command
         if response in ("e", "edit"):
@@ -1684,11 +1686,15 @@ Respond conversationally. Be concise but helpful."""
         if returncode == 0 and not has_stderr_errors(stderr):
             print(f"\033[1;32m✓ Command completed successfully\033[0m")
             log_command(user_input, command, True)
+            # Return output for LLM to respond to
+            output = stdout or "(no output)"
+            return True, f"Command: {command}\nOutput:\n{output}"
         else:
             print(f"\033[1;31m✗ Command failed with exit code {returncode}\033[0m")
             log_command(user_input, command, False)
-
-        return True
+            # Return error info for LLM to respond to
+            output = f"stdout: {stdout}\nstderr: {stderr}" if stderr else stdout or "(no output)"
+            return True, f"Command: {command}\nFailed with exit code {returncode}\nOutput:\n{output}"
 
     def process_input(self, user_input: str):
         """Process user input through the agent."""
@@ -1703,7 +1709,7 @@ Respond conversationally. Be concise but helpful."""
             "generate a script", "build a script",
         ])
 
-        # Check cache FIRST in remote mode to potentially skip LLM
+        # Check cache FIRST in remote mode to potentially skip LLM for command generation
         # But skip cache for script requests
         if REMOTE_MODE and CACHE_AVAILABLE and not is_script_request:
             try:
@@ -1712,7 +1718,21 @@ Respond conversationally. Be concise but helpful."""
                 cache_hit = cache.lookup(user_input)
 
                 if cache_hit:
-                    self._execute_cached_command(cache_hit, user_input)
+                    executed, output_for_llm = self._execute_cached_command(cache_hit, user_input)
+                    if executed and output_for_llm:
+                        # Get LLM response to the command output
+                        try:
+                            response_prompt = f"""The user asked: "{user_input}"
+
+A cached command was executed with this result:
+{output_for_llm}
+
+Provide a brief, helpful response summarizing the result for the user. Be concise."""
+                            response = self.llm.invoke(response_prompt)
+                            reply = response.content if hasattr(response, 'content') else str(response)
+                            print(f"\n\033[1;37m{reply.strip()}\033[0m")
+                        except Exception as e:
+                            pass  # Silent fail - command already executed
                     return
             except Exception as e:
                 print(f"\033[2m(cache error: {e})\033[0m")

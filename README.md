@@ -132,7 +132,7 @@ Edit `.env` to configure:
 OPENROUTER_API_KEY=sk-or-v1-xxxxx
 
 # Optional: Model to use (see https://openrouter.ai/models)
-OPENROUTER_MODEL=anthropic/claude-sonnet-4
+OPENROUTER_MODEL=anthropic/claude-sonnet-4.5
 
 # Optional: Voice input model for speech-to-text
 OPENROUTER_VOICE_MODEL=google/gemini-2.5-flash-lite
