@@ -19,6 +19,11 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Annotated, Callable, Optional
 
+
+class CommandCancelled(Exception):
+    """Raised when user cancels a command to abort the agent loop immediately."""
+    pass
+
 import requests
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -920,8 +925,7 @@ def run_shell_command(
         if should_execute == "feedback":
             return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
         if not should_execute or final_command is None:
-            shell_state.skip_llm_response = True
-            return "Command cancelled by user."
+            raise CommandCancelled()
 
         if REMOTE_MODE:
             # Handle cd on remote server
@@ -980,8 +984,7 @@ def run_shell_command(
         return f"User feedback on command '{command}': {final_command}. Please generate a new command based on this feedback."
 
     if not should_execute or final_command is None:
-        shell_state.skip_llm_response = True
-        return "Command cancelled by user."
+        raise CommandCancelled()
 
     # Check if command requires interactive mode (for passwords) - not supported in remote mode
     if requires_interactive_mode(final_command) and not REMOTE_MODE:
@@ -1742,6 +1745,10 @@ Respond conversationally. Be concise but helpful."""
                 if content and not content.startswith("Execution"):
                     print(f"\n\033[1;37m{content}\033[0m")
 
+        except CommandCancelled:
+            # User cancelled - return immediately without any LLM call
+            print("\033[2mCancelled.\033[0m")
+            return
         except Exception as e:
             print(f"\033[1;31mError: {e}\033[0m")
 

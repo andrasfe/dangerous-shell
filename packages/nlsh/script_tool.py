@@ -118,6 +118,7 @@ def run_shell_script(
         get_shell_state,
         get_skip_permissions,
         input_no_history,
+        CommandCancelled,
     )
 
     # Create a GeneratedScript object for review
@@ -173,11 +174,9 @@ def run_shell_script(
             prompt = "Execute? Type 'EXECUTE' to confirm: "
             response = input_no_history(prompt).strip()
             if response != "EXECUTE":
-                get_shell_state().skip_llm_response = True
-                return "Script cancelled by user."
+                raise CommandCancelled()
         elif review.risk_level == RiskLevel.CRITICAL:
-            get_shell_state().skip_llm_response = True
-            return "Script rejected: Critical safety issues found."
+            raise CommandCancelled()
         else:
             prompt = "Execute? [y/n/e(dit)/f(eedback)]: "
             response = input_no_history(prompt).lower().strip()
@@ -187,11 +186,9 @@ def run_shell_script(
                 return f"User feedback on script: {feedback}. Please modify the script accordingly."
             elif response == "e":
                 print("Script editing not yet implemented. Please provide feedback instead.")
-                get_shell_state().skip_llm_response = True
-                return "Script cancelled by user."
+                raise CommandCancelled()
             elif response not in ("y", "yes"):
-                get_shell_state().skip_llm_response = True
-                return "Script cancelled by user."
+                raise CommandCancelled()
 
     # Get working directory - use getter function for runtime value
     if is_remote_mode():
