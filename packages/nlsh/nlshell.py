@@ -857,6 +857,9 @@ def execute_remote_command(command: str, cwd: str | None = None) -> tuple[bool, 
 
     try:
         return session.execute_command(command, cwd=cwd)
+    except ConnectionError:
+        # Re-raise connection errors so caller can handle restart scenarios
+        raise
     except Exception as e:
         return False, "", str(e), -1
 
@@ -2274,25 +2277,30 @@ def main():
         if args.llm_off:
             # Direct execution - no LLM
             print(f"\033[2m→ direct\033[0m")
-            if REMOTE_MODE:
-                _success, stdout, stderr, returncode = execute_remote_command(command)
-            else:
-                proc_result = subprocess.run(
-                    command,
-                    shell=True,
-                    executable=SHELL_EXECUTABLE,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                stdout = proc_result.stdout
-                stderr = proc_result.stderr
-                returncode = proc_result.returncode
+            try:
+                if REMOTE_MODE:
+                    _success, stdout, stderr, returncode = execute_remote_command(command)
+                else:
+                    proc_result = subprocess.run(
+                        command,
+                        shell=True,
+                        executable=SHELL_EXECUTABLE,
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    stdout = proc_result.stdout
+                    stderr = proc_result.stderr
+                    returncode = proc_result.returncode
 
-            if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
-            if stderr:
-                print(f"\033[1;31m{stderr}\033[0m", end="" if stderr.endswith("\n") else "\n")
+                if stdout:
+                    print(stdout, end="" if stdout.endswith("\n") else "\n")
+                if stderr:
+                    print(f"\033[1;31m{stderr}\033[0m", end="" if stderr.endswith("\n") else "\n")
+            except ConnectionError as e:
+                # Connection closed - likely server restart command
+                print(f"\033[2m(connection closed: {e})\033[0m")
+                returncode = 0  # Treat as success for restart commands
 
             # Clean shutdown for inline mode
             if _remote_session:

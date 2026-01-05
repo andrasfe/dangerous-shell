@@ -657,6 +657,14 @@ class PersistentRemoteConnection:
 
             except websockets.ConnectionClosed:
                 self._connected = False
+                # Fail all pending requests so they don't wait for timeout
+                async with self._pending_lock:
+                    for request_id, future in list(self._pending_requests.items()):
+                        if not future.done():
+                            future.set_exception(
+                                ConnectionError("Connection closed by server")
+                            )
+                    self._pending_requests.clear()
                 break
             except asyncio.CancelledError:
                 break
