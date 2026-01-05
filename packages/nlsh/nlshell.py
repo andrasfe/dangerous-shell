@@ -1033,14 +1033,19 @@ def run_shell_command(
             else:
                 print(f"\n\033[1;31m✗ Command failed with exit code {result.returncode}\033[0m")
                 log_command(natural_request, final_command, False)
-                return f"Execution FAILED (exit code {result.returncode}, interactive mode)"
+                # Don't let LLM retry - abort agent loop
+                raise CommandCancelled()
 
         except subprocess.TimeoutExpired:
             log_command(natural_request, final_command, False)
-            return "Command timed out"
+            print("\033[1;31mCommand timed out\033[0m")
+            raise CommandCancelled()
+        except CommandCancelled:
+            raise  # Re-raise to propagate
         except Exception as e:
             log_command(natural_request, final_command, False)
-            return f"Error executing command: {e}"
+            print(f"\033[1;31mError executing command: {e}\033[0m")
+            raise CommandCancelled()
 
     # Execute the command with fix loop
     current_cmd = final_command
@@ -1184,7 +1189,8 @@ def run_shell_command(
 
             if not fix_result or not fix_result.get("fixed_command"):
                 print("\033[1;31mCouldn't determine a fix for this error.\033[0m")
-                return f"Execution FAILED (exit code {returncode})\n" + "\n".join(output_parts)
+                # Abort agent loop - don't let LLM retry
+                raise CommandCancelled()
 
             fixed_cmd = fix_result["fixed_command"]
             fix_explanation = fix_result.get("explanation", "")
@@ -1216,10 +1222,14 @@ def run_shell_command(
 
         except subprocess.TimeoutExpired:
             log_command(natural_request, current_cmd, False)
-            return "Command timed out after 5 minutes"
+            print("\033[1;31mCommand timed out after 5 minutes\033[0m")
+            raise CommandCancelled()
+        except CommandCancelled:
+            raise  # Re-raise to propagate
         except Exception as e:
             log_command(natural_request, current_cmd, False)
-            return f"Error executing command: {e}"
+            print(f"\033[1;31mError executing command: {e}\033[0m")
+            raise CommandCancelled()
 
 
 def get_current_context() -> str:
