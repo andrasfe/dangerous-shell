@@ -20,8 +20,15 @@ from dataclasses import dataclass
 from typing import Annotated, Callable, Optional
 
 
-class CommandCancelled(Exception):
-    """Raised when user cancels a command to abort the agent loop immediately."""
+from langgraph.errors import GraphBubbleUp
+
+
+class CommandCancelled(GraphBubbleUp):
+    """Raised when user cancels a command to abort the agent loop immediately.
+
+    Inherits from GraphBubbleUp so it bubbles up through the LangGraph agent
+    without being caught and converted to an error message for the LLM.
+    """
     pass
 
 import requests
