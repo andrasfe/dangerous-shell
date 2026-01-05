@@ -1129,8 +1129,9 @@ def run_shell_command(
                 # Don't suggest if this was already a suggested command to avoid infinite chains
                 if getattr(run_shell_command, '_is_suggested', False):
                     run_shell_command._is_suggested = False  # Reset for next call
-                    shell_state.skip_llm_response = True
-                    return "Command executed successfully. This was a follow-up command. Do NOT suggest any more commands - wait for new user input."
+                    # Suggested command completed - abort agent loop without LLM call
+                    print("\033[2mDone.\033[0m")
+                    raise CommandCancelled()
 
                 suggestion = suggest_next_command(current_cmd, full_output, natural_request)
                 if suggestion:
@@ -1156,9 +1157,9 @@ def run_shell_command(
                         run_shell_command._is_suggested = True  # Mark as suggested to prevent chaining
                         continue  # Run the suggested/edited command
                     else:
-                        # User declined suggested next command - stop here
-                        shell_state.skip_llm_response = True
-                        return "Command executed successfully. User declined follow-up. Do NOT suggest any more commands - wait for new user input."
+                        # User declined suggested next command - abort agent loop without LLM call
+                        print("\033[2mDeclined.\033[0m")
+                        raise CommandCancelled()
 
                 # No suggestion or suggestion flow completed - return success
                 # (async interpretation was already enqueued above)
@@ -1174,8 +1175,9 @@ def run_shell_command(
             else:
                 fix_response = input_no_history("\n\033[1;33mWould you like me to try to fix this? [y/n]:\033[0m ").strip().lower()
             if fix_response not in ("y", "yes"):
-                shell_state.skip_llm_response = True
-                return "Command failed. User declined fix. Do NOT suggest any more commands - wait for new user input."
+                # User declined fix - abort agent loop without LLM call
+                print("\033[2mDeclined.\033[0m")
+                raise CommandCancelled()
 
             print("\033[2m(analyzing error...)\033[0m")
             fix_result = fix_failed_command_standalone(current_cmd, stderr, returncode)
@@ -1208,9 +1210,9 @@ def run_shell_command(
                 current_cmd = approved_cmd
                 continue  # Re-run with fixed/edited command
 
-            # User declined the fix suggestion
-            shell_state.skip_llm_response = True
-            return "Command failed. User declined fix. Do NOT suggest any more commands - wait for new user input."
+            # User declined the fix suggestion - abort agent loop without LLM call
+            print("\033[2mDeclined.\033[0m")
+            raise CommandCancelled()
 
         except subprocess.TimeoutExpired:
             log_command(natural_request, current_cmd, False)
@@ -1901,7 +1903,7 @@ Provide a brief, helpful response summarizing the result for the user. Be concis
             if shell_state.conversation_history and shell_state.conversation_history[-1]["role"] == "user":
                 shell_state.conversation_history.pop()
             shell_state.current_request = ""
-            print("\033[2mCancelled.\033[0m")
+            # Don't print again - we already printed from the tool
             return
         except Exception as e:
             print(f"\033[1;31mError: {e}\033[0m")
