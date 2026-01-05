@@ -1095,16 +1095,39 @@ def run_shell_command(
                     except Exception as e:
                         print(f"\033[2m(cache store error: {e})\033[0m")
 
+                # Capture full output for async interpretation
+                full_output = stdout or ""
+                if stderr:
+                    full_output += "\n" + stderr
+
+                # Enqueue for async interpretation if worker is available
+                # Do this BEFORE suggested command flow so all successful commands get interpreted
+                if INTERPRETATION_WORKER_AVAILABLE and full_output:
+                    import sys
+                    main_module = sys.modules.get('__main__')
+                    nlshell_instance = getattr(main_module, '_nlshell_instance', None) if main_module else None
+
+                    worker = getattr(nlshell_instance, '_interpretation_worker', None) if nlshell_instance else None
+                    if worker and worker.is_running:
+                        request = create_request(
+                            request_id=str(uuid.uuid4()),
+                            command=current_cmd,
+                            output=full_output,
+                            priority=RequestPriority.NORMAL,
+                            context={
+                                "natural_request": natural_request or shell_state.current_request,
+                                "cwd": str(_remote_cwd if REMOTE_MODE else shell_state.cwd),
+                                "is_remote": REMOTE_MODE,
+                            },
+                        )
+                        worker.enqueue(request)  # Fire-and-forget, don't change return path
+
                 # Check for suggested next command (only for original command, not chained suggestions)
                 # Don't suggest if this was already a suggested command to avoid infinite chains
                 if getattr(run_shell_command, '_is_suggested', False):
                     run_shell_command._is_suggested = False  # Reset for next call
                     shell_state.skip_llm_response = True
                     return "Command executed successfully. This was a follow-up command. Do NOT suggest any more commands - wait for new user input."
-
-                full_output = stdout or ""
-                if stderr:
-                    full_output += "\n" + stderr
 
                 suggestion = suggest_next_command(current_cmd, full_output, natural_request)
                 if suggestion:
@@ -1134,39 +1157,8 @@ def run_shell_command(
                         shell_state.skip_llm_response = True
                         return "Command executed successfully. User declined follow-up. Do NOT suggest any more commands - wait for new user input."
 
-                # Enqueue for async interpretation if worker is available
-                if INTERPRETATION_WORKER_AVAILABLE:
-                    # Import here to avoid circular import issues
-                    import sys
-                    main_module = sys.modules.get('__main__')
-                    nlshell_instance = getattr(main_module, '_nlshell_instance', None) if main_module else None
-
-                    # Also check module-level NLShell instances
-                    if nlshell_instance is None:
-                        # Try to find the NLShell instance from the current context
-                        for obj in globals().values():
-                            if isinstance(obj, type) and obj.__name__ == 'NLShell':
-                                break
-
-                    # If we have a worker, enqueue the output
-                    worker = getattr(nlshell_instance, '_interpretation_worker', None) if nlshell_instance else None
-                    if worker and worker.is_running and full_output:
-                        request = create_request(
-                            request_id=str(uuid.uuid4()),
-                            command=current_cmd,
-                            output=full_output,
-                            priority=RequestPriority.NORMAL,
-                            context={
-                                "natural_request": natural_request or shell_state.current_request,
-                                "cwd": str(_remote_cwd if REMOTE_MODE else shell_state.cwd),
-                                "is_remote": REMOTE_MODE,
-                            },
-                        )
-                        if worker.enqueue(request):
-                            # Successfully enqueued - skip LLM response
-                            shell_state.skip_llm_response = True
-                            return "Command executed successfully. Output queued for async interpretation."
-
+                # No suggestion or suggestion flow completed - return success
+                # (async interpretation was already enqueued above)
                 return f"Execution SUCCESS\n" + "\n".join(output_parts) if output_parts else "Execution SUCCESS (no output)"
 
             # Command failed
