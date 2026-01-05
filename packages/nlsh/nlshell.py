@@ -291,6 +291,7 @@ Your primary function is to translate natural language requests into zsh shell c
 - Use the execution history to understand context (e.g., "do that again", "same but for X")
 - Keep responses concise - this is a command line interface
 - When installing projects, ALWAYS read the documentation first to understand requirements
+- ALWAYS quote paths that contain spaces with double quotes (e.g., "/path/to/My Documents")
 
 ## Context:
 - Shell: {shell_name} (commands run via {shell_path})
@@ -1245,7 +1246,11 @@ def get_current_context() -> str:
     history_str = format_history_context(history)
     conversation_str = shell_state.get_conversation_context()
 
-    parts = [f"Current working directory: {get_current_directory()}"]
+    cwd = get_current_directory()
+    parts = [f"Current working directory: {cwd}"]
+    # Remind LLM to quote paths with spaces
+    if " " in cwd:
+        parts.append(f'NOTE: The current directory contains spaces. Quote paths with double quotes: "{cwd}"')
 
     if conversation_str:
         parts.append(conversation_str)
@@ -1276,6 +1281,8 @@ Current directory: {get_current_directory()}
 {"Execution mode: REMOTE (paths should be relative to remote server)" if REMOTE_MODE else ""}
 
 IMPORTANT: If the error output contains "User feedback:", this is direct input from the user correcting or guiding your fix. You MUST incorporate this feedback into your new suggestion. The user's feedback takes priority over your previous analysis.
+
+IMPORTANT: If the current directory or any path contains spaces, you MUST quote them with double quotes (e.g., find "/path/My Documents" ...).
 
 Please analyze the error and provide a FIXED version of the command.
 Respond with ONLY a JSON object in this format:
